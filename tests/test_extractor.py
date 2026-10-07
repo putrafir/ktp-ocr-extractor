@@ -135,6 +135,37 @@ Berlaku Hingga : SEUMUR HIDUP
         self.assertEqual(ktp_data.status_perkawinan, "BELUM KAWIN")
         self.assertEqual(ktp_data.pekerjaan, "PELAJAR/MAHASISWA")
         self.assertEqual(ktp_data.berlaku_hingga, "SEUMUR HIDUP")
+    def test_2026_andri_papriana_17_digit_nik(self):
+        # Case where OCR misreads colon as leading 1: 13602141204920003
+        raw_text = """
+PROVINSIBANTEN
+KABUPATENLEBAK
+NIK : 13602141204920003
+Nama : ANDRIPAPRIANA
+Tempat/Tgl Lahir : LEBAK,12-04-1992
+Jenis Kelamin : LAKI-LAKI
+Gol. Darah : 
+Alamat : KP.SELAHAUR
+RT/RW : 001/009
+Kel/Desa : CJOROLEBAK
+Kecamatan : RANGKASBITUNG
+Agama : ISLAM
+Status Perkawinan : CERAIHIDUP
+Pekerjaan : KARYAWANSWASTA
+Kewarganegaraan : WNI
+Berlaku Hingga : SEUMURHIDUP
+        """
+        parse_result = {
+            "raw_text": raw_text,
+            "text_items": []
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.nik, "3602141204920003")
+        self.assertEqual(ktp_data.nama, "ANDRIPAPRIANA")
+        self.assertEqual(ktp_data.tempat_tgl_lahir, "LEBAK, 12-04-1992")
+        self.assertEqual(ktp_data.status_perkawinan, "CERAI HIDUP")
+        self.assertEqual(ktp_data.berlaku_hingga, "SEUMUR HIDUP")
+
 
 if __name__ == "__main__":
     unittest.main()

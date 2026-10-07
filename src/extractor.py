@@ -14,28 +14,80 @@ class KTPExtractor:
     LABEL_PATTERNS = {
         "nik": ["NIK", "N1K", "NOMOR INDUK KEPENDUDUKAN", "NOMOR INDUK"],
         "nama": ["NAMA", "NAME"],
-        "tempat_tgl_lahir": ["TEMPAT/TGL LAHIR", "TEMPAT / TGL LAHIR", "TEMPAT, TGL LAHIR", "TEMPAT TGL LAHIR", "TEMPAT/TGL", "LAHIR"],
-        "jenis_kelamin": ["JENIS KELAMIN", "KELAMIN", "JNS KELAMIN"],
+        "tempat_tgl_lahir": ["TEMPAT/TGL LAHIR", "TEMPAT / TGL LAHIR", "TEMPAT, TGL LAHIR", "TEMPAT TGL LAHIR", "TEMPAT/TGL", "LAHIR", "TENPAT/TGL LAHIR"],
+        "jenis_kelamin": ["JENIS KELAMIN", "KELAMIN", "JNS KELAMIN", "JENISKELAMN"],
         "gol_darah": ["GOL. DARAH", "GOL DARAH", "GOL.DARAH", "DARAH"],
-        "alamat": ["ALAMAT"],
+        "alamat": ["ALAMAT", "ALAMAL"],
         "rt_rw": ["RT/RW", "RT / RW", "RT/ RW", "RT /RW", "RTRW"],
         "kel_desa": ["KEL/DESA", "KEL / DESA", "KELURAHAN", "DESA", "KELIDESA"],
         "kecamatan": ["KECAMATAN", "KEC."],
         "agama": ["AGAMA"],
         "status_perkawinan": ["STATUS PERKAWINAN", "STATUS", "PERKAWINAN"],
-        "pekerjaan": ["PEKERJAAN"],
+        "pekerjaan": ["PEKERJAAN", "PAKERJAAN"],
         "kewarganegaraan": ["KEWARGANEGARAAN", "WARGA NEGARA"],
         "berlaku_hingga": ["BERLAKU HINGGA", "BERLAKU"]
     }
 
     KNOWN_RELIGIONS = ["ISLAM", "KRISTEN", "KATHOLIK", "KATOLIK", "HINDU", "BUDDHA", "BUDHA", "KONGHUCU"]
-    KNOWN_MARITAL_STATUS = ["BELUM KAWIN", "KAWIN", "CERAI HIDUP", "CERAI MATI"]
+    KNOWN_MARITAL_STATUS = ["BELUM KAWIN", "KAWIN", "CERAI HIDUP", "CERAI MATI", "CERAIHIDUP", "CERAIMATI"]
     KNOWN_GENDERS = ["LAKI-LAKI", "PEREMPUAN"]
+
+    PROVINCE_CODES = {
+        '11': 'ACEH', '12': 'SUMATERA UTARA', '13': 'SUMATERA BARAT', '14': 'RIAU',
+        '15': 'JAMBI', '16': 'SUMATERA SELATAN', '17': 'BENGKULU', '18': 'LAMPUNG',
+        '19': 'BANGKA BELITUNG', '21': 'KEPULAUAN RIAU', '31': 'DKI JAKARTA',
+        '32': 'JAWA BARAT', '33': 'JAWA TENGAH', '34': 'DAERAH ISTIMEWA YOGYAKARTA',
+        '35': 'JAWA TIMUR', '36': 'BANTEN', '51': 'BALI', '52': 'NUSA TENGGARA BARAT',
+        '53': 'NUSA TENGGARA TIMUR', '61': 'KALIMANTAN BARAT', '62': 'KALIMANTAN TENGAH',
+        '63': 'KALIMANTAN SELATAN', '64': 'KALIMANTAN TIMUR', '65': 'KALIMANTAN UTARA',
+        '71': 'SULAWESI UTARA', '72': 'SULAWESI TENGAH', '73': 'SULAWESI SELATAN',
+        '74': 'SULAWESI TENGGARA', '75': 'GORONTALO', '76': 'SULAWESI BARAT',
+        '81': 'MALUKU', '82': 'MALUKU UTARA', '91': 'PAPUA BARAT', '92': 'PAPUA'
+    }
 
     def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
 
-    def clean_nik(self, raw_nik: str) -> Optional[str]:
+    def resolve_17_digit_nik(self, digits_str: str, context_text: str = "") -> str:
+        """
+        Disambiguates 17-digit NIK strings resulting from leading/trailing OCR noise
+        (e.g., misread colon ':' or vertical line '|' interpreted as '1').
+        """
+        if len(digits_str) != 17:
+            return digits_str[:16]
+
+        opt_tail = digits_str[1:]   # Drop leading noise (e.g. colon read as '1')
+        opt_head = digits_str[:16]  # Drop trailing digit
+
+        # 1. Match birth date from context text if available (DDMMYY or female DD+40MMYY)
+        if context_text:
+            date_m = re.search(r'(\d{2})[-/.](\d{2})[-/.]\d{2}(\d{2})', context_text)
+            if date_m:
+                d, m, y = date_m.group(1), date_m.group(2), date_m.group(3)
+                try:
+                    male_pattern = f"{d}{m}{y}"
+                    female_pattern = f"{int(d)+40:02d}{m}{y}"
+                    if male_pattern in opt_tail or female_pattern in opt_tail:
+                        return opt_tail
+                    if male_pattern in opt_head or female_pattern in opt_head:
+                        return opt_head
+                except ValueError:
+                    pass
+
+            # 2. Match province code from context text
+            prov_tail = opt_tail[:2]
+            if prov_tail in self.PROVINCE_CODES:
+                prov_name = self.PROVINCE_CODES[prov_tail].replace(" ", "")
+                if prov_name in context_text.replace(" ", "").upper():
+                    return opt_tail
+
+        # 3. Fallback: if leading character is 1/7/0 and tail starts with a valid province code
+        if digits_str[0] in ['1', '7', '0', '|'] and opt_tail[:2] in self.PROVINCE_CODES:
+            return opt_tail
+
+        return opt_head
+
+    def clean_nik(self, raw_nik: str, context_text: str = "") -> Optional[str]:
         """Cleans and corrects common OCR mistakes in 16-digit NIK."""
         if not raw_nik:
             return None
@@ -52,13 +104,23 @@ class KTPExtractor:
         sub = re.sub(r'^[^\d]*nik\s*[:：\s]*', '', raw_nik, flags=re.IGNORECASE)
         cleaned = "".join(char_map.get(c, c) for c in sub)
         digits = re.sub(r'[^\d]', '', cleaned)
-        
-        match = re.search(r'\b\d{16}\b', digits)
-        if match:
-            return match.group(0)
-        elif len(digits) >= 16:
-            return digits[:16]
-        elif len(digits) >= 14:
+
+        # Exact 16 digits match
+        if len(digits) == 16:
+            return digits
+
+        # Handle 17 digits (leading noise character from colon / separator)
+        if len(digits) == 17:
+            return self.resolve_17_digit_nik(digits, context_text)
+
+        if len(digits) > 17:
+            # Check if there is an exact 16-digit substring inside
+            match_16 = re.search(r'\b\d{16}\b', digits)
+            if match_16:
+                return match_16.group(0)
+            return self.resolve_17_digit_nik(digits[:17], context_text)
+
+        if len(digits) >= 14:
             return digits
         return None
 
@@ -99,7 +161,6 @@ class KTPExtractor:
         # Identify items that act as labels
         label_matches: List[Tuple[str, Dict[str, Any]]] = []
         for item in sorted_items:
-            # Labels must be on the left half of the card
             if page_width > 0 and item["x"] > page_width * 0.40:
                 continue
 
@@ -107,7 +168,6 @@ class KTPExtractor:
             if field_name:
                 label_matches.append((field_name, item))
 
-        # For each matched label, look for value items to its right within strict vertical tolerance
         for field_name, label_item in label_matches:
             if field_name in extracted:
                 continue
@@ -131,7 +191,6 @@ class KTPExtractor:
                 value_texts = []
                 for cand in row_candidates:
                     t = cand["text"].strip()
-                    # Strip standard & full-width colon and noise
                     t = re.sub(r'^[+\-=—–_:\.\|\s：；]+', '', t).strip()
                     if field_name == "berlaku_hingga" and t.upper() in ["BERLAKU", "HINGGA"]:
                         continue
@@ -161,7 +220,7 @@ class KTPExtractor:
 
             # NIK check
             if "nik" not in extracted:
-                nik_cand = self.clean_nik(line)
+                nik_cand = self.clean_nik(line, context_text=raw_text)
                 if nik_cand and len(nik_cand) == 16:
                     extracted["nik"] = nik_cand
 
@@ -188,7 +247,7 @@ class KTPExtractor:
             if "status_perkawinan" not in extracted:
                 for stat in self.KNOWN_MARITAL_STATUS:
                     if re.search(rf'\b{stat}\b', line_upper):
-                        extracted["status_perkawinan"] = stat
+                        extracted["status_perkawinan"] = "CERAI HIDUP" if "CERAI" in stat and "HIDUP" in stat else "CERAI MATI" if "CERAI" in stat and "MATI" in stat else "BELUM KAWIN" if "BELUM" in stat else "KAWIN"
                         break
 
             # Citizenship check
@@ -206,7 +265,7 @@ class KTPExtractor:
 
             # Validity check
             if "berlaku_hingga" not in extracted:
-                if "SEUMUR HIDUP" in line_upper:
+                if "SEUMUR HIDUP" in line_upper or "SEUMURHIDUP" in line_upper:
                     extracted["berlaku_hingga"] = "SEUMUR HIDUP"
                 else:
                     date_match = re.search(r'\b\d{2}[-\/.]\d{2}[-\/.]\d{4}\b', line)
@@ -236,38 +295,36 @@ class KTPExtractor:
             r'\bPROVINSI\b', r'\bKABUPATEN\b', r'\bKOTA\b',
             r'\bJAKARTA\s*BARAT\b', r'\bJAKARTA\s*PUSAT\b', r'\bJAKARTA\s*SELATAN\b',
             r'\bJAKARTA\s*TIMUR\b', r'\bJAKARTA\s*UTARA\b',
-            r'\bJAWA\s*TIMUR\b', r'\bJAWA\s*BARAT\b', r'\bJAWA\s*TENGAH\b'
+            r"JAWA\s*TIMUR", r"JAWA\s*BARAT", r"JAWA\s*TENGAH"
         ]
 
         def strip_noise(text: str) -> str:
             cleaned = text
             for nw in noise_words:
                 cleaned = re.sub(nw, '', cleaned, flags=re.IGNORECASE)
-            # Remove punctuation noise including full-width colon and dashes
             cleaned = re.sub(r'^[+\-=—–_:\.\|\s：；]+', '', cleaned)
             cleaned = re.sub(r'[+\-=—–_:\.\|\s：；]+$', '', cleaned)
             return cleaned.strip()
 
-        # 1. Clean NIK - Global search across raw text if not yet found or invalid
-        if "nik" not in data or not data["nik"] or len(re.sub(r'\D', '', str(data["nik"]))) != 16:
-            all_niks = re.findall(r'\b\d{16}\b', raw_text)
-            if all_niks:
-                data["nik"] = all_niks[0]
-            else:
-                cleaned_cand = self.clean_nik(raw_text)
-                if cleaned_cand and len(cleaned_cand) == 16:
-                    data["nik"] = cleaned_cand
-        else:
-            data["nik"] = self.clean_nik(data["nik"]) or data["nik"]
+        # 1. Clean NIK with full context
+        if "nik" in data and data["nik"]:
+            data["nik"] = self.clean_nik(data["nik"], context_text=raw_text)
+            
+        if "nik" not in data or not data["nik"] or len(str(data["nik"])) != 16:
+            # Global search across raw text for any sequence of 16-17 digits
+            digit_seqs = re.findall(r'\b\d{16,17}\b', raw_text)
+            for seq in digit_seqs:
+                resolved = self.clean_nik(seq, context_text=raw_text)
+                if resolved and len(resolved) == 16:
+                    data["nik"] = resolved
+                    break
 
         # 2. Disentangle Nama and Tempat/Tgl Lahir if they got merged
         raw_nama = data.get("nama", "") or ""
         raw_ttl = data.get("tempat_tgl_lahir", "") or ""
 
-        # Pattern for birth place and date e.g. "BANYUWANGI, 02-12-2004"
         ttl_regex = r'\b((?:(?:JAKARTA|KOTA|KABUPATEN)\s+)?[A-Za-z]{3,}),\s*(\d{2}[-\/.]\d{2}[-\/.]\d{4})'
         
-        # Check if TTL was accidentally merged inside nama
         if raw_nama:
             ttl_in_nama = re.search(ttl_regex, raw_nama)
             if ttl_in_nama:
@@ -286,9 +343,13 @@ class KTPExtractor:
 
         # Clean Tempat/Tgl Lahir
         if "tempat_tgl_lahir" in data and data["tempat_tgl_lahir"]:
-            ttl = strip_noise(data["tempat_tgl_lahir"])
-            ttl = re.split(r'\b(LAKI|PEREMPUAN|JENIS|GOL)\b', ttl, flags=re.IGNORECASE)[0]
-            data["tempat_tgl_lahir"] = strip_noise(ttl)
+            ttl = data["tempat_tgl_lahir"]
+            ttl = re.sub(r"^(TEMPAT|TGL|LAHIR)[\s\/:,\.-]*", "", ttl, flags=re.IGNORECASE)
+            ttl = re.split(r"(LAKI|PEREMPUAN|JENIS|GOL)", ttl, flags=re.IGNORECASE)[0]
+            ttl = re.sub(r"^[+\-=—–_:\.\|\s：；]+", "", ttl)
+            ttl = re.sub(r"[+\-=—–_:\.\|\s：；]+$", "", ttl)
+            ttl = re.sub(r"([A-Za-z]+),(\d{2})", r"\1, \2", ttl)
+            data["tempat_tgl_lahir"] = ttl.strip()
         elif raw_text:
             m_ttl = re.search(ttl_regex, raw_text)
             if m_ttl:
@@ -355,9 +416,9 @@ class KTPExtractor:
         sp_upper = sp_search.upper()
         if "BELUM KAWIN" in sp_upper:
             data["status_perkawinan"] = "BELUM KAWIN"
-        elif "CERAI HIDUP" in sp_upper:
+        elif "CERAI HIDUP" in sp_upper or "CERAIHIDUP" in sp_upper:
             data["status_perkawinan"] = "CERAI HIDUP"
-        elif "CERAI MATI" in sp_upper:
+        elif "CERAI MATI" in sp_upper or "CERAIMATI" in sp_upper:
             data["status_perkawinan"] = "CERAI MATI"
         elif "KAWIN" in sp_upper:
             data["status_perkawinan"] = "KAWIN"
