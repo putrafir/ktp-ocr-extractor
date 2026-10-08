@@ -48,7 +48,8 @@ class PaddleKTPParser:
         
         # Run PaddleOCR inference with explicit unclip_ratio to prevent default 1.6 override
         unclip_ratio = getattr(self.config, "OCR_DET_UNCLIP_RATIO", 2.2)
-        result, elapse = self.engine(img, unclip_ratio=unclip_ratio)
+        use_cls = getattr(self.config, "OCR_USE_TEXT_CLS", False)
+        result, elapse = self.engine(img, unclip_ratio=unclip_ratio, use_cls=use_cls)
         latency_ms = (time.time() - start_time) * 1000.0
 
         all_text_items: List[Dict[str, Any]] = []

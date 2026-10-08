@@ -24,6 +24,7 @@ class Config:
 
     # OCR Detection settings
     OCR_DET_UNCLIP_RATIO: float = 2.2  # Optimal text box expansion for KTP text against guilloche lines
+    OCR_USE_TEXT_CLS: bool = False  # Disable text angle classifier to avoid flipping dot-matrix numeric strings (like NIK)
 
     # KTP Validation thresholds
     MIN_KTP_CONFIDENCE_THRESHOLD: float = 0.50
