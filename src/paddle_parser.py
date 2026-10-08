@@ -18,6 +18,9 @@ class PaddleKTPParser:
         self.config = config or Config()
         # Initialize RapidOCR (PaddleOCR models)
         self.engine = RapidOCR()
+        # Expand bounding boxes slightly to prevent ascender/descender clipping on KTP cards
+        if hasattr(self.engine, "text_det") and hasattr(self.engine.text_det, "postprocess_op"):
+            self.engine.text_det.postprocess_op.unclip_ratio = getattr(self.config, "OCR_DET_UNCLIP_RATIO", 2.2)
 
     def parse_document(self, file_path: Union[str, Path, np.ndarray]) -> Dict[str, Any]:
         """
@@ -43,8 +46,9 @@ class PaddleKTPParser:
 
         h, w = img.shape[:2]
         
-        # Run PaddleOCR inference
-        result, elapse = self.engine(img)
+        # Run PaddleOCR inference with explicit unclip_ratio to prevent default 1.6 override
+        unclip_ratio = getattr(self.config, "OCR_DET_UNCLIP_RATIO", 2.2)
+        result, elapse = self.engine(img, unclip_ratio=unclip_ratio)
         latency_ms = (time.time() - start_time) * 1000.0
 
         all_text_items: List[Dict[str, Any]] = []

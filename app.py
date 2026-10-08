@@ -46,6 +46,11 @@ with st.sidebar:
         help="Tolak dokumen jika terdeteksi bukan KTP Indonesia yang sah (mencegah data halusinasi)"
     )
     
+    if st.button("🔄 Bersihkan Cache Pipeline", help="Muat ulang model OCR dan pipeline ke versi terbaru"):
+        st.cache_resource.clear()
+        st.success("Cache berhasil dibersihkan!")
+        st.rerun()
+
     st.divider()
     st.markdown("### 📌 Spesifikasi Arsitektur")
     st.markdown("""
@@ -60,11 +65,11 @@ with st.sidebar:
 
 # Pipeline instance cached with module reload & cache bust
 @st.cache_resource(show_spinner=False)
-def get_pipeline(engine_name: str, max_d: int, strict_mode: bool, _v: int = 2):
-    cfg = Config(MAX_IMAGE_WIDTH=max_d)
+def get_pipeline(engine_name: str, max_d: int, strict_mode: bool, _v: int = 4):
+    cfg = Config(MAX_IMAGE_WIDTH=max_d, OCR_DET_UNCLIP_RATIO=2.2)
     return KTPExtractionPipeline(config=cfg, engine=engine_name, strict_validation=strict_mode)
 
-pipeline = get_pipeline(ocr_engine, max_dim, strict_validation, _v=2)
+pipeline = get_pipeline(ocr_engine, max_dim, strict_validation, _v=4)
 
 # Sample file selector
 samples_dir = Path("data/samples")

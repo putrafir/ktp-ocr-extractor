@@ -192,5 +192,144 @@ RT8W
         self.assertIn("JLSIULANGG SEKARSARI", ktp_data.alamat)
 
 
+    def test_clean_agama_fuzzy_and_typos(self):
+        # Test various OCR typos in religion
+        self.assertEqual(self.extractor.clean_agama("1SLAM"), "ISLAM")
+        self.assertEqual(self.extractor.clean_agama("ISLM"), "ISLAM")
+        self.assertEqual(self.extractor.clean_agama("ISLAN"), "ISLAM")
+        self.assertEqual(self.extractor.clean_agama("KR1STEN"), "KRISTEN")
+        self.assertEqual(self.extractor.clean_agama("KRIS TEN"), "KRISTEN")
+        self.assertEqual(self.extractor.clean_agama("KAT0LIK"), "KATOLIK")
+        self.assertEqual(self.extractor.clean_agama("KATHOLIK"), "KATOLIK")
+        self.assertEqual(self.extractor.clean_agama("H1NDU"), "HINDU")
+        self.assertEqual(self.extractor.clean_agama("BUDHA"), "BUDDHA")
+        self.assertEqual(self.extractor.clean_agama("KONGHUCU"), "KONGHUCU")
+        self.assertEqual(self.extractor.clean_agama("KONG HU CU"), "KONGHUCU")
+
+    def test_clean_gol_darah_normalization_and_hyphen(self):
+        # Hyphens and unknown should strictly map to None
+        self.assertIsNone(self.extractor.clean_gol_darah("-"))
+        self.assertIsNone(self.extractor.clean_gol_darah(" - "))
+        self.assertIsNone(self.extractor.clean_gol_darah("--"))
+        self.assertIsNone(self.extractor.clean_gol_darah("_"))
+        self.assertIsNone(self.extractor.clean_gol_darah(""))
+
+        # Digit substitutions
+        self.assertEqual(self.extractor.clean_gol_darah("0"), "O")
+        self.assertEqual(self.extractor.clean_gol_darah("Q"), "O")
+        self.assertEqual(self.extractor.clean_gol_darah("8"), "B")
+        self.assertEqual(self.extractor.clean_gol_darah("4"), "A")
+        self.assertEqual(self.extractor.clean_gol_darah("A8"), "AB")
+        self.assertEqual(self.extractor.clean_gol_darah("4B"), "AB")
+
+        # In context text
+        self.assertEqual(self.extractor.clean_gol_darah(None, raw_text="Gol Darat : 0"), "O")
+        self.assertEqual(self.extractor.clean_gol_darah(None, raw_text="Gol. Darah : B"), "B")
+        self.assertIsNone(self.extractor.clean_gol_darah(None, raw_text="Gol. Darah : -"))
+
+    def test_clean_status_perkawinan_fuzzy(self):
+        self.assertEqual(self.extractor.clean_status_perkawinan("BELUM KAW1N"), "BELUM KAWIN")
+        self.assertEqual(self.extractor.clean_status_perkawinan("BLM KAWIN"), "BELUM KAWIN")
+        self.assertEqual(self.extractor.clean_status_perkawinan("BELUMKAWIN"), "BELUM KAWIN")
+        self.assertEqual(self.extractor.clean_status_perkawinan("KAW1N"), "KAWIN")
+        self.assertEqual(self.extractor.clean_status_perkawinan("CERAIHIDUP"), "CERAI HIDUP")
+        self.assertEqual(self.extractor.clean_status_perkawinan("CERAI H1DUP"), "CERAI HIDUP")
+        self.assertEqual(self.extractor.clean_status_perkawinan("CERAIMATI"), "CERAI MATI")
+        self.assertEqual(self.extractor.clean_status_perkawinan("CERAI MAT1"), "CERAI MATI")
+
+    def test_clean_kewarganegaraan_fuzzy(self):
+        self.assertEqual(self.extractor.clean_kewarganegaraan("W N I"), "WNI")
+        self.assertEqual(self.extractor.clean_kewarganegaraan("W.N.I"), "WNI")
+        self.assertEqual(self.extractor.clean_kewarganegaraan("WN1"), "WNI")
+        self.assertEqual(self.extractor.clean_kewarganegaraan("W-N-I"), "WNI")
+        self.assertEqual(self.extractor.clean_kewarganegaraan("W N A"), "WNA")
+        self.assertEqual(self.extractor.clean_kewarganegaraan("WN4"), "WNA")
+
+    def test_end_to_end_fuzzy_categorical_extraction(self):
+        parse_result = {
+            "raw_text": """
+PROVINSI JAWA BARAT
+KABUPATEN BANDUNG
+NIK : 3204123456780001
+Nama : BUDI SETIAWAN
+Tempat/Tgl Lahir : BANDUNG, 10-05-1995
+Jenis Kelamin : LAKI-LAKI Gol. Darah : 0
+Alamat : JL. ASIA AFRIKA NO 10
+RT/RW : 001/002
+Kel/Desa : BRAGA
+Kecamatan : SUMUR BANDUNG
+Agama : 1SLAM
+Status Perkawinan: BELUM KAW1N
+Pekerjaan : WIRASWASTA
+Kewarganegaraan : W N I
+Berlaku Hingga : SEUMUR HIDUP
+            """,
+            "text_items": []
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.agama, "ISLAM")
+        self.assertEqual(ktp_data.gol_darah, "O")
+        self.assertEqual(ktp_data.status_perkawinan, "BELUM KAWIN")
+        self.assertEqual(ktp_data.kewarganegaraan, "WNI")
+
+    def test_end_to_end_hyphen_blood_and_katholik(self):
+        parse_result = {
+            "raw_text": """
+PROVINSI NTT
+KABUPATEN SIKKA
+NIK : 5304123456780002
+Nama : MARIA FRANSISKA
+Tempat/Tgl Lahir : MAUMERE, 15-08-1998
+Jenis Kelamin : PEREMPUAN Gol. Darah : -
+Alamat : JL. FLORES INDAH NO 5
+RT/RW : 002/001
+Kel/Desa : KOTA UNENG
+Kecamatan : ALOK
+Agama : KATHOLIK
+Status Perkawinan: CERAI H1DUP
+Pekerjaan : PEGAWAI SWASTA
+Kewarganegaraan : WNI
+Berlaku Hingga : SEUMUR HIDUP
+            """,
+            "text_items": []
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.agama, "KATOLIK")
+        self.assertIsNone(ktp_data.gol_darah)
+        self.assertEqual(ktp_data.status_perkawinan, "CERAI HIDUP")
+        self.assertEqual(ktp_data.kewarganegaraan, "WNI")
+
+    def test_tuban_gladys_nik_and_nama(self):
+        # Case from censored Tuban KTP with dot-matrix font & 17-digit leading colon noise:
+        # NIK: 23523165706980004 (23 invalid province, 35 valid Jatim)
+        # Nama: GLADYSWAHYUKHAIPUNNISA (P->R dot matrix error and joined words)
+        raw_text = """
+PROVINSI JAWA TIMUR
+KABUPATEN TUBAN
+NIK : 23523165706980004
+Nama : GLADYSWAHYUKHAIPUNNISA
+Tempat/Tgl Lahir : 
+Jenis kelamin : 
+Alamat : 
+RT/RW : 
+Kel/Desa : 
+Kecamatan : 
+Agama : KATOLIK
+Status Perkawinan: KAWIN
+Pekerjaan : 
+Kewarganegaraan: WNI
+Berlaku Hingga : 
+        """
+        parse_result = {
+            "raw_text": raw_text,
+            "text_items": []
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.nik, "3523165706980004")
+        self.assertEqual(ktp_data.nama, "GLADYS WAHYU KHAIRUNNISA")
+        self.assertEqual(ktp_data.agama, "KATOLIK")
+        self.assertEqual(ktp_data.status_perkawinan, "KAWIN")
+        self.assertEqual(ktp_data.kewarganegaraan, "WNI")
+
 if __name__ == "__main__":
     unittest.main()
