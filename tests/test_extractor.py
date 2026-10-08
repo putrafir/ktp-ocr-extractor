@@ -166,6 +166,31 @@ Berlaku Hingga : SEUMURHIDUP
         self.assertEqual(ktp_data.status_perkawinan, "CERAI HIDUP")
         self.assertEqual(ktp_data.berlaku_hingga, "SEUMUR HIDUP")
 
+    def test_mentor_satya_smartphone_photo(self):
+        # Case from mentor screenshot with real smartphone camera noise/typos:
+        # LAKDAXI, TeLahir, DENPASAB.23-03 2003, RT8W, missing Nama label
+        raw_text = """
+IGEDESATYANANDA GAUTAMA
+TeLahir
+DENPASAB.23-03 2003
+LAKDAXI
+Gol Darat
+JLSIULANGG SEKARSARI
+XH25XMEPIASARI
+RT8W
+000/000
+        """
+        parse_result = {
+            "raw_text": raw_text,
+            "text_items": []
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.nama, "IGEDESATYANANDA GAUTAMA")
+        self.assertEqual(ktp_data.tempat_tgl_lahir, "DENPASAR, 23-03-2003")
+        self.assertEqual(ktp_data.jenis_kelamin, "LAKI-LAKI")
+        self.assertEqual(ktp_data.rt_rw, "000/000")
+        self.assertIn("JLSIULANGG SEKARSARI", ktp_data.alamat)
+
 
 if __name__ == "__main__":
     unittest.main()
