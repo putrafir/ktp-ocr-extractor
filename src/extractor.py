@@ -14,11 +14,11 @@ class KTPExtractor:
     LABEL_PATTERNS = {
         "nik": ["NIK", "N1K", "NOMOR INDUK KEPENDUDUKAN", "NOMOR INDUK"],
         "nama": ["NAMA", "NAME"],
-        "tempat_tgl_lahir": ["TEMPAT/TGL LAHIR", "TEMPAT / TGL LAHIR", "TEMPAT, TGL LAHIR", "TEMPAT TGL LAHIR", "TEMPAT/TGL", "LAHIR", "TENPAT/TGL LAHIR"],
+        "tempat_tgl_lahir": ["TEMPAT/TGL LAHIR", "TEMPAT / TGL LAHIR", "TEMPAT, TGL LAHIR", "TEMPAT TGL LAHIR", "TEMPAT/TGL", "LAHIR", "TENPAT/TGL LAHIR", "TELAHIR", "TE LAHIR", "TEMPAT LAHIR", "TGL LAHIR"],
         "jenis_kelamin": ["JENIS KELAMIN", "KELAMIN", "JNS KELAMIN", "JENISKELAMN"],
-        "gol_darah": ["GOL. DARAH", "GOL DARAH", "GOL.DARAH", "DARAH"],
+        "gol_darah": ["GOL. DARAH", "GOL DARAH", "GOL.DARAH", "DARAH", "GOL DARAT", "GOL. DARAT", "DARAT"],
         "alamat": ["ALAMAT", "ALAMAL"],
-        "rt_rw": ["RT/RW", "RT / RW", "RT/ RW", "RT /RW", "RTRW"],
+        "rt_rw": ["RT/RW", "RT / RW", "RT/ RW", "RT /RW", "RTRW", "RT8W", "RT/8W", "RTBW", "RT 8W"],
         "kel_desa": ["KEL/DESA", "KEL / DESA", "KELURAHAN", "DESA", "KELIDESA"],
         "kecamatan": ["KECAMATAN", "KEC."],
         "agama": ["AGAMA"],
@@ -323,7 +323,7 @@ class KTPExtractor:
         raw_nama = data.get("nama", "") or ""
         raw_ttl = data.get("tempat_tgl_lahir", "") or ""
 
-        ttl_regex = r'\b((?:(?:JAKARTA|KOTA|KABUPATEN)\s+)?[A-Za-z]{3,}),\s*(\d{2}[-\/.]\d{2}[-\/.]\d{4})'
+        ttl_regex = r'\b((?:(?:JAKARTA|KOTA|KABUPATEN)\s+)?[A-Za-z]{3,})[\.,\s]+(\d{2}[-\/.\s]\d{2}[-\/.\s]\d{4})\b'
         
         if raw_nama:
             ttl_in_nama = re.search(ttl_regex, raw_nama)
@@ -338,49 +338,80 @@ class KTPExtractor:
         # Clean Nama
         if "nama" in data and data["nama"]:
             nama = strip_noise(data["nama"])
-            nama = re.split(r'\b(TEMPAT|TGL|LAHIR|JENIS|ALAMAT)\b', nama, flags=re.IGNORECASE)[0]
+            nama = re.split(r"\b(TEMPAT|TGL|LAHIR|JENIS|ALAMAT)\b", nama, flags=re.IGNORECASE)[0]
             data["nama"] = strip_noise(nama)
+        elif raw_text:
+            lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+            ttl_idx = None
+            for idx, ln in enumerate(lines_raw):
+                if re.search(r"\b\d{2}[-\/\.\s]\d{2}[-\/\.\s]\d{4}\b", ln) or any(k in ln.upper() for k in ["LAHIR", "TELAHIR"]):
+                    ttl_idx = idx
+                    break
+            if ttl_idx is not None and ttl_idx > 0:
+                for cand in lines_raw[:ttl_idx]:
+                    c_clean = cand.upper()
+                    if not any(k in c_clean for k in ["PROVINSI", "KABUPATEN", "KOTA", "NIK", "REPUBLIK", "INDONESIA", "NAMA"]):
+                        if len(c_clean) >= 4 and re.match(r"^[A-Z\s\.\,'-]+$", c_clean):
+                            data["nama"] = cand.strip()
+                            break
 
         # Clean Tempat/Tgl Lahir
         if "tempat_tgl_lahir" in data and data["tempat_tgl_lahir"]:
             ttl = data["tempat_tgl_lahir"]
-            ttl = re.sub(r"^(TEMPAT|TGL|LAHIR)[\s\/:,\.-]*", "", ttl, flags=re.IGNORECASE)
-            ttl = re.split(r"(LAKI|PEREMPUAN|JENIS|GOL)", ttl, flags=re.IGNORECASE)[0]
+            ttl = re.sub(r"^(TEMPAT|TGL|LAHIR|TELAHIR)[\s\/:,\.-]*", "", ttl, flags=re.IGNORECASE)
+            ttl = re.split(r" (LAKI|PEREMPUAN|JENIS|GOL) ", ttl, flags=re.IGNORECASE)[0]
             ttl = re.sub(r"^[+\-=—–_:\.\|\s：；]+", "", ttl)
             ttl = re.sub(r"[+\-=—–_:\.\|\s：；]+$", "", ttl)
-            ttl = re.sub(r"([A-Za-z]+),(\d{2})", r"\1, \2", ttl)
+            m_dot = re.search(r"\b([A-Za-z]{3,})[\.,\s]+(\d{2}[-\/\.\s]\d{2}[-\/\.\s]\d{4})\b", ttl)
+            if m_dot:
+                p = m_dot.group(1).upper()
+                if p == "DENPASAB":
+                    p = "DENPASAR"
+                d = re.sub(r"[\s\/\.]", "-", m_dot.group(2))
+                ttl = f"{p}, {d}"
+            else:
+                ttl = re.sub(r"([A-Za-z]+),(\d{2})", r"\1, \2", ttl)
             data["tempat_tgl_lahir"] = ttl.strip()
         elif raw_text:
             m_ttl = re.search(ttl_regex, raw_text)
             if m_ttl:
-                p = strip_noise(m_ttl.group(1))
-                d = m_ttl.group(2).replace('/', '-').replace('.', '-')
+                p = strip_noise(m_ttl.group(1)).upper()
+                if p == "DENPASAB":
+                    p = "DENPASAR"
+                d = re.sub(r"[\s\/\.]", "-", m_ttl.group(2))
                 if not any(k in p.upper() for k in ["BERLAKU", "HINGGA", "PROVINSI", "KABUPATEN"]):
                     data["tempat_tgl_lahir"] = f"{p}, {d}"
-
         # Clean Jenis Kelamin & Golongan Darah
         jk_raw = (data.get("jenis_kelamin") or "") + " " + raw_text
         jk_upper = jk_raw.upper()
 
         if "gol_darah" not in data or not data["gol_darah"]:
-            goldar_m = re.search(r'(?:GOL(?:ONGAN)?\.?\s*DARAH|\bDARAH)\s*[:：\s]*([ABO]|AB)\b', jk_upper)
+            goldar_m = re.search(r"(?:GOL(?:ONGAN)?\.?\s*(?:DARAH|DARAT)|\bDARAH|\bDARAT)\s*[:：\s]*([ABO]|AB)\b", jk_upper)
             if goldar_m:
                 data["gol_darah"] = goldar_m.group(1)
 
         if "PEREMPUAN" in jk_upper or "EREMPUAN" in jk_upper:
             data["jenis_kelamin"] = "PEREMPUAN"
-        elif "LAKI" in jk_upper:
+        elif any(k in jk_upper for k in ["LAKI", "LAKDAXI", "LAKDA", "LAK-LAK", "LAK!"]) or re.search(r"LAK[I1DAX\-\s]{3,}", jk_upper) or fuzz.partial_ratio("LAKI-LAKI", jk_upper) > 60:
             data["jenis_kelamin"] = "LAKI-LAKI"
         else:
             data["jenis_kelamin"] = None
-
         # Clean Alamat
         if "alamat" in data and data["alamat"]:
             alamat = strip_noise(data["alamat"])
             if alamat.upper().startswith("IL."):
                 alamat = "JL." + alamat[3:]
             data["alamat"] = alamat
-
+        elif raw_text:
+            lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+            for idx, ln in enumerate(lines_raw):
+                lu = ln.upper()
+                if lu.startswith("JL") or lu.startswith("JALAN") or lu.startswith("KP") or lu.startswith("DUSUN"):
+                    addr_parts = [ln]
+                    if idx + 1 < len(lines_raw) and not any(k in lines_raw[idx+1].upper() for k in ["RT", "RW", "KEL", "KEC", "AGAMA"]):
+                        addr_parts.append(lines_raw[idx+1])
+                    data["alamat"] = " ".join(addr_parts).strip()
+                    break
         # Clean RT/RW
         if "rt_rw" in data and data["rt_rw"]:
             m = re.search(r'(\d{2,3}\s*/\s*\d{2,3})', data["rt_rw"])
