@@ -1,50 +1,36 @@
 import streamlit as st
 import json
+import time
+import io
+import importlib
 from pathlib import Path
 from PIL import Image, ImageOps
-import io
 
+# Enable HEIC / HEIF support for Apple iPhone photos
 try:
     import pillow_heif
     pillow_heif.register_heif_opener()
 except ImportError:
     pass
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
+import src.pipeline
+importlib.reload(src.pipeline)
 from src.pipeline import KTPExtractionPipeline
 from src.config import Config
 
-# Page setup
 st.set_page_config(
-    page_title="KTP Extractor Prototype",
+    page_title="KTP Information Extractor & Validator",
     page_icon="🪪",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Custom CSS for polished look
+st.title("🪪 KTP Information Extractor & Validator")
 st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #1E3A8A;
-        margin-bottom: 0.2rem;
-    }
-    .sub-header {
-        font-size: 1.05rem;
-        color: #4B5563;
-        margin-bottom: 1.5rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+Prototype ekstraksi informasi KTP lokal berbasis deep learning & penalaran spasial.
+Dilengkapi **Two-Tier Document Validator** untuk memverifikasi apakah berkas yang diunggah adalah KTP sah atau bukan.
+""")
 
-st.markdown('<div class="main-header">🪪 KTP Information Extractor</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Local Model Prototype: OCR + Spatial Layout Extractor (PaddleOCR & LiteParse)</div>', unsafe_allow_html=True)
-
-# Sidebar
+# Sidebar settings
 with st.sidebar:
     st.header("⚙️ Konfigurasi Engine")
     ocr_engine = st.selectbox(
@@ -54,26 +40,31 @@ with st.sidebar:
         index=0
     )
     max_dim = st.number_input("Max Dimension (px)", value=1200, step=100)
+    strict_validation = st.checkbox(
+        "Strict KTP Validation",
+        value=True,
+        help="Tolak dokumen jika terdeteksi bukan KTP Indonesia yang sah (mencegah data halusinasi)"
+    )
     
     st.divider()
     st.markdown("### 📌 Spesifikasi Arsitektur")
     st.markdown("""
     - **Model Spec:** Local Model (Zero Cloud SaaS)
+    - **Validation:** Two-Tier Hybrid (Visual Sanity + Semantic Layout)
     - **Engines:**
       - **PaddleOCR:** DBNet + SVTR deep learning (OnnxRuntime)
       - **LiteParse:** Spatial grid projection (PDFium/Rust)
     - **Preprocessing:** Auto-Deskew + HEIC iPhone support
     - **Latency Focus:** Yes (~500 - 900 ms)
-    - **YOLO / Fine-tuning:** None (Rule & Geometry based)
     """)
 
-# Pipeline instance cached
-@st.cache_resource
-def get_pipeline(engine_name: str, max_d: int):
+# Pipeline instance cached with module reload & cache bust
+@st.cache_resource(show_spinner=False)
+def get_pipeline(engine_name: str, max_d: int, strict_mode: bool, _v: int = 2):
     cfg = Config(MAX_IMAGE_WIDTH=max_d)
-    return KTPExtractionPipeline(config=cfg, engine=engine_name)
+    return KTPExtractionPipeline(config=cfg, engine=engine_name, strict_validation=strict_mode)
 
-pipeline = get_pipeline(ocr_engine, max_dim)
+pipeline = get_pipeline(ocr_engine, max_dim, strict_validation, _v=2)
 
 # Sample file selector
 samples_dir = Path("data/samples")
@@ -117,15 +108,26 @@ elif selected_sample != "-- Pilih dari sampel data --":
 if target_image_bytes:
     col_img, col_res = st.columns([1, 1], gap="medium")
 
+    extracted_data = None
+    preprocessed_bgr = None
+    result = None
+
     with col_res:
-        st.subheader("⚡ Proses Ekstraksi")
-        with st.spinner(f"Mengekstrak data KTP dengan {ocr_engine.upper()}..."):
+        st.subheader("⚡ Proses Ekstraksi & Validasi")
+        with st.spinner(f"Mengekstrak dan memvalidasi dokumen dengan {ocr_engine.upper()}..."):
             try:
-                result = pipeline.process(target_image_bytes)
-                extracted_data = result["data"]
-                latency_ms = result["latency_ms"]
-                items_count = result["text_items_count"]
+                try:
+                    result = pipeline.process(target_image_bytes, strict_validation=strict_validation)
+                except TypeError:
+                    setattr(pipeline, "strict_validation", strict_validation)
+                    result = pipeline.process(target_image_bytes)
+
+                status = result.get("status", "success")
+                val = result.get("validation", {})
+                latency_ms = result.get("latency_ms", 0)
+                items_count = result.get("text_items_count", 0)
                 preprocessed_bgr = result.get("preprocessed_img")
+                extracted_data = result.get("data")
                 
                 # Metrics banner
                 mcol1, mcol2, mcol3 = st.columns(3)
@@ -136,7 +138,16 @@ if target_image_bytes:
                 with mcol3:
                     st.metric(label="🔍 Text Elements", value=f"{items_count} items")
 
-                st.success(f"Ekstraksi Berhasil menggunakan {result['engine'].upper()}!")
+                if status == "rejected":
+                    st.error(f"❌ Dokumen Ditolak: Berkas BUKAN KTP Republik Indonesia yang valid (Skor: {val.get('confidence_score', 0)*100:.1f}%)")
+                    with st.expander("🔍 Rincian Analisis Validasi", expanded=True):
+                        st.write(f"**Skor Visual:** {val.get('visual_score', 0)*100:.1f}% | **Skor Struktur Semantik:** {val.get('semantic_score', 0)*100:.1f}%")
+                        st.markdown("**Alasan Penolakan:**")
+                        for r in val.get("rejection_reasons", []):
+                            st.markdown(f"- ❌ {r}")
+                else:
+                    conf_pct = val.get('confidence_score', 0) * 100
+                    st.success(f"✅ Dokumen KTP Terverifikasi (Keyakinan: {conf_pct:.1f}%) | Engine: {result['engine'].upper()}")
 
             except Exception as e:
                 st.error(f"Terjadi kesalahan saat ekstraksi: {e}")
@@ -157,52 +168,62 @@ if target_image_bytes:
             except Exception:
                 st.image(target_image_bytes, caption=f"Input: {image_source_label}", width="stretch")
 
-    if extracted_data:
+    if result:
         st.divider()
-        st.subheader("📋 Hasil Ekstraksi Key-Value Pair")
-        
-        tab_table, tab_json, tab_raw = st.tabs(["📊 Tabel Data", "💻 Raw JSON", "📝 Teks OCR Mentah"])
+        if extracted_data:
+            st.subheader("📋 Hasil Ekstraksi Key-Value Pair")
+            tab_table, tab_json, tab_raw, tab_diag = st.tabs(["📊 Tabel Data", "💻 Raw JSON", "📝 Teks OCR Mentah", "🛡️ Rincian Validasi"])
 
-        with tab_table:
-            formatted_data = []
-            field_labels = {
-                "nik": "NIK",
-                "nama": "Nama Lengkap",
-                "tempat_tgl_lahir": "Tempat / Tgl Lahir",
-                "jenis_kelamin": "Jenis Kelamin",
-                "gol_darah": "Golongan Darah",
-                "alamat": "Alamat",
-                "rt_rw": "RT / RW",
-                "kel_desa": "Kelurahan / Desa",
-                "kecamatan": "Kecamatan",
-                "agama": "Agama",
-                "status_perkawinan": "Status Perkawinan",
-                "pekerjaan": "Pekerjaan",
-                "kewarganegaraan": "Kewarganegaraan",
-                "berlaku_hingga": "Berlaku Hingga"
-            }
-            
-            for key, label in field_labels.items():
-                val = extracted_data.get(key)
-                formatted_data.append({
-                    "Field": label,
-                    "Nilai": val if val else "-"
-                })
-            
-            st.table(formatted_data)
+            with tab_table:
+                formatted_data = []
+                field_labels = {
+                    "nik": "NIK",
+                    "nama": "Nama Lengkap",
+                    "tempat_tgl_lahir": "Tempat / Tgl Lahir",
+                    "jenis_kelamin": "Jenis Kelamin",
+                    "gol_darah": "Golongan Darah",
+                    "alamat": "Alamat",
+                    "rt_rw": "RT / RW",
+                    "kel_desa": "Kelurahan / Desa",
+                    "kecamatan": "Kecamatan",
+                    "agama": "Agama",
+                    "status_perkawinan": "Status Perkawinan",
+                    "pekerjaan": "Pekerjaan",
+                    "kewarganegaraan": "Kewarganegaraan",
+                    "berlaku_hingga": "Berlaku Hingga"
+                }
+                
+                for key, label in field_labels.items():
+                    val_field = extracted_data.get(key)
+                    formatted_data.append({
+                        "Field": label,
+                        "Nilai": val_field if val_field else "-"
+                    })
+                
+                st.table(formatted_data)
 
-        with tab_json:
-            json_str = json.dumps(extracted_data, ensure_ascii=False, indent=2)
-            st.code(json_str, language="json")
-            st.download_button(
-                label="📥 Unduh Hasil JSON",
-                data=json_str,
-                file_name=f"ktp_{ocr_engine}.json",
-                mime="application/json"
-            )
+            with tab_json:
+                json_str = json.dumps(extracted_data, ensure_ascii=False, indent=2)
+                st.code(json_str, language="json")
+                st.download_button(
+                    label="📥 Unduh Hasil JSON",
+                    data=json_str,
+                    file_name=f"ktp_{ocr_engine}.json",
+                    mime="application/json"
+                )
 
-        with tab_raw:
-            st.text_area("OCR Raw Text Layout:", value=result.get("raw_text", ""), height=200)
+            with tab_raw:
+                st.text_area("OCR Raw Text Layout:", value=result.get("raw_text", ""), height=200)
+
+            with tab_diag:
+                st.json(result.get("validation", {}))
+        else:
+            # Document rejected
+            tab_raw, tab_diag = st.tabs(["📝 Teks OCR Mentah", "🛡️ Rincian Validasi"])
+            with tab_raw:
+                st.text_area("OCR Raw Text Layout:", value=result.get("raw_text", ""), height=200)
+            with tab_diag:
+                st.json(result.get("validation", {}))
 
 else:
-    st.info("👋 Silakan unggah gambar KTP di atas atau taruh file KTP di folder `data/samples/` untuk memulai.")
+    st.info("👋 Silakan unggah gambar KTP di atas atau pilih sampel dari folder `data/samples/` untuk memulai.")
