@@ -1,5 +1,22 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+
+class KTPValidationResult(BaseModel):
+    is_ktp: bool = Field(..., description="Apakah dokumen terverifikasi sebagai KTP Indonesia")
+    confidence_score: float = Field(..., description="Skor keyakinan komposit (0.0 - 1.0)")
+    visual_score: float = Field(..., description="Skor kelayakan visual kartu (0.0 - 1.0)")
+    semantic_score: float = Field(..., description="Skor kelayakan struktur teks KTP (0.0 - 1.0)")
+    rejection_reasons: List[str] = Field(default_factory=list, description="Alasan penolakan jika bukan KTP")
+    detected_features: Dict[str, Any] = Field(default_factory=dict, description="Metadata fitur yang terdeteksi")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump()
+
+class InvalidKTPDocumentError(Exception):
+    def __init__(self, validation_result: KTPValidationResult):
+        self.validation = validation_result
+        reasons = "; ".join(validation_result.rejection_reasons) or "Tidak memenuhi karakteristik KTP"
+        super().__init__(f"Dokumen bukan KTP yang valid (Skor: {validation_result.confidence_score:.2f}): {reasons}")
 
 class KTPData(BaseModel):
     nik: Optional[str] = Field(None, description="Nomor Induk Kependudukan (16 digit)")

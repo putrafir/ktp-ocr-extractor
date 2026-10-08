@@ -1,15 +1,14 @@
-from fastapi import FastAPI, File, UploadFile, Query, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from typing import Literal
-import time
 
 from src.pipeline import KTPExtractionPipeline
-from src.models import KTPData
 
 app = FastAPI(
-    title="KTP Extractor API",
-    description="High-performance Local KTP Information Extractor (PaddleOCR / LiteParse)",
-    version="1.0.0"
+    title="KTP Information Extractor API",
+    description="API for local Indonesian KTP extraction, layout analysis, and document validation.",
+    version="1.1.0"
 )
 
 # Enable CORS for frontend integration
@@ -31,19 +30,21 @@ pipelines = {
 def root():
     return {
         "status": "online",
-        "service": "KTP Information Extractor",
+        "service": "KTP Information Extractor & Validator",
+        "version": "1.1.0",
         "engines_available": ["paddle", "liteparse"],
-        "docs_url": "/docs"
+        "validation_enabled": True
     }
 
 @app.post("/extract")
 async def extract_ktp(
     file: UploadFile = File(..., description="KTP image file (JPG, PNG, HEIC, WEBP)"),
-    engine: Literal["paddle", "liteparse"] = Query("paddle", description="OCR engine to use")
+    engine: Literal["paddle", "liteparse"] = Query("paddle", description="OCR engine to use"),
+    strict: bool = Query(True, description="Strict KTP validation (rejects non-KTP images with 422)")
 ):
     """
     Extracts key-value pair information from uploaded KTP image.
-    Supports JPG, PNG, HEIC (iPhone), and WEBP.
+    Validates whether the uploaded image is an Indonesian KTP.
     """
     try:
         content = await file.read()
@@ -51,11 +52,30 @@ async def extract_ktp(
             raise HTTPException(status_code=400, detail="Empty file uploaded.")
 
         pipeline = pipelines.get(engine, pipelines["paddle"])
-        result = pipeline.process(content)
+        result = pipeline.process(content, strict_validation=strict)
+
+        if result.get("status") == "rejected":
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "success": False,
+                    "status": "rejected",
+                    "filename": file.filename,
+                    "message": "Dokumen yang diunggah bukan KTP Republik Indonesia yang valid.",
+                    "validation": result.get("validation", {}),
+                    "metadata": {
+                        "engine": result["engine"],
+                        "latency_ms": result["latency_ms"]
+                    }
+                }
+            )
 
         return {
             "success": True,
+            "status": "success",
             "filename": file.filename,
+            "is_ktp": result.get("is_ktp", True),
+            "validation": result.get("validation", {}),
             "data": result["data"],
             "metadata": {
                 "engine": result["engine"],

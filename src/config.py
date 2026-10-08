@@ -21,3 +21,7 @@ class Config:
     
     # Matching thresholds
     FUZZY_SCORE_THRESHOLD: float = 65.0
+
+    # KTP Validation thresholds
+    MIN_KTP_CONFIDENCE_THRESHOLD: float = 0.50
+    BLUR_VARIANCE_THRESHOLD: float = 30.0

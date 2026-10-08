@@ -11,7 +11,7 @@ from src.pipeline import KTPExtractionPipeline
 
 def main():
     parser = argparse.ArgumentParser(
-        description="KTP Extractor Prototype (Local Model -> OCR + Layout Extractor)"
+        description="KTP Extractor Prototype (Local Model -> OCR + Layout Extractor + Validator)"
     )
     parser.add_argument(
         "--image", "-i",
@@ -27,6 +27,11 @@ def main():
         help="OCR Engine: 'paddle' (Recommended, deep learning) or 'liteparse' (experimental)"
     )
     parser.add_argument(
+        "--no-strict",
+        action="store_true",
+        help="Bypass strict validation rejection if document is suspected non-KTP"
+    )
+    parser.add_argument(
         "--output", "-o",
         type=str,
         default=None,
@@ -36,7 +41,7 @@ def main():
         "--pretty",
         action="store_true",
         default=True,
-        help="Pretty-print JSON output"
+        help="Pretty print JSON output (default: True)"
     )
 
     args = parser.parse_args()
@@ -46,8 +51,8 @@ def main():
         print(f"Error: File '{image_path}' tidak ditemukan.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[*] Memproses gambar KTP: {image_path} [Engine: {args.engine}]...")
-    pipeline = KTPExtractionPipeline(engine=args.engine)
+    print(f"[*] Memproses citra: {image_path} [Engine: {args.engine}]...")
+    pipeline = KTPExtractionPipeline(engine=args.engine, strict_validation=not args.no_strict)
 
     try:
         result = pipeline.process(image_path)
@@ -55,12 +60,28 @@ def main():
         print(f"[!] Error saat ekstraksi: {e}", file=sys.stderr)
         sys.exit(1)
 
-    data = result["data"]
+    val = result.get("validation", {})
     latency = result["latency_ms"]
 
+    if result.get("status") == "rejected":
+        print("\n" + "="*50)
+        print("[!] VALIDASI DITOLAK: Berkas BUKAN KTP Republik Indonesia yang valid.")
+        print(f"[!] Skor Keyakinan: {val.get('confidence_score', 0)*100:.1f}%")
+        print(f"[!] Skor Visual: {val.get('visual_score', 0)*100:.1f}% | Skor Struktur Semantik: {val.get('semantic_score', 0)*100:.1f}%")
+        print("\n[!] Alasan Penolakan:")
+        for r in val.get("rejection_reasons", []):
+            print(f"    - {r}")
+        print("="*50)
+        print("[*] Gunakan flag '--no-strict' jika ingin memaksakan ekstraksi pada berkas ini.")
+        sys.exit(2)
+
+    data = result["data"]
     indent = 2 if args.pretty else None
     json_str = json.dumps(data, ensure_ascii=False, indent=indent)
 
+    print("\n" + "="*50)
+    print(f"[+] Status Dokumen: TERVERIFIKASI SEBAGAI KTP (Keyakinan: {val.get('confidence_score', 0)*100:.1f}%)")
+    print("="*50)
     print("\n[+] Hasil Ekstraksi Key-Value:")
     print(json_str)
     print(f"\n[+] Total Latensi: {latency} ms (Engine: {result['engine']})")
