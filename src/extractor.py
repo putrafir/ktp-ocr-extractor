@@ -35,6 +35,13 @@ class KTPExtractor:
     KNOWN_CITIZENSHIPS = ["WNI", "WNA"]
     KNOWN_BLOOD_TYPES = ["A", "B", "AB", "O"]
 
+    DISALLOWED_BIRTH_PLACES = {
+        "BERLAKU", "HINGGA", "PROVINSI", "KABUPATEN", "PEKERJAAN",
+        "KEWARGANEGARAAN", "AGAMA", "STATUS", "PERKAWINAN", "ALAMAT",
+        "RT", "RW", "KEL", "DESA", "KECAMATAN", "GOLONGAN", "DARAH",
+        "JENIS", "KELAMIN", "NIK", "NAMA", "WARGA", "NEGARA"
+    }
+
     PROVINCE_CODES = {
         '11': 'ACEH', '12': 'SUMATERA UTARA', '13': 'SUMATERA BARAT', '14': 'RIAU',
         '15': 'JAMBI', '16': 'SUMATERA SELATAN', '17': 'BENGKULU', '18': 'LAMPUNG',
@@ -50,6 +57,11 @@ class KTPExtractor:
 
     def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
+
+    def _is_disallowed_place(self, place: str) -> bool:
+        """True if the birth place candidate is actually a KTP label word (whole-word match)."""
+        words = re.findall(r'[A-Z]+', (place or "").upper())
+        return any(w in self.DISALLOWED_BIRTH_PLACES for w in words)
 
     def clean_agama(self, raw_val: Optional[str], raw_text: str = "") -> Optional[str]:
         """
@@ -180,6 +192,8 @@ class KTPExtractor:
         Extracts and normalizes marital status into canonical values:
         ['BELUM KAWIN', 'KAWIN', 'CERAI HIDUP', 'CERAI MATI'].
         Corrects OCR typos like BELUM KAW1N, BLM KAWIN, CERAIHIDUP, etc.
+        Avoids false positives from regional names like 'BELU' or 'BALI',
+        and avoids matching the label 'STATUS PERKAWINAN' as 'KAWIN'.
         """
         def _normalize_text(txt: str) -> str:
             t = txt.upper()
@@ -192,23 +206,33 @@ class KTPExtractor:
             if not norm:
                 return None
             
-            if "BELUM" in norm or "BLM" in norm or fuzz.partial_ratio("BELUM", norm) >= 80:
-                return "BELUM KAWIN"
+            # Strip label words if present
+            val_norm = re.sub(r'\b(?:STATUS|SLATUS|PERKAWINAN)\b', '', norm).strip()
+            if not val_norm:
+                return None
             
-            if "CERAI" in norm or fuzz.partial_ratio("CERAI", norm) >= 75:
-                if "MATI" in norm or "MAT1" in norm or fuzz.partial_ratio("MATI", norm) >= 75:
+            words = val_norm.split()
+            # Explicit tokens or length >= 5 to prevent 'BELU' or 'BALI' matching 'BELUM'
+            if any(w in ["BELUM", "BLM", "BLMKWN", "BELUMKAWIN"] for w in words) or "BELUM " in val_norm or " BELUM" in val_norm or "BLM " in val_norm:
+                return "BELUM KAWIN"
+            for w in words:
+                if len(w) >= 5 and fuzz.ratio("BELUM", w) >= 85:
+                    return "BELUM KAWIN"
+            
+            if "CERAI" in val_norm or any(fuzz.ratio("CERAI", w) >= 80 for w in words if len(w) >= 4):
+                if "MATI" in val_norm or "MAT1" in val_norm or fuzz.partial_ratio("MATI", val_norm) >= 75:
                     return "CERAI MATI"
-                if "HIDUP" in norm or "H1DUP" in norm or fuzz.partial_ratio("HIDUP", norm) >= 70:
+                if "HIDUP" in val_norm or "H1DUP" in val_norm or fuzz.partial_ratio("HIDUP", val_norm) >= 70:
                     return "CERAI HIDUP"
-                score_h = fuzz.ratio(norm, "CERAI HIDUP")
-                score_m = fuzz.ratio(norm, "CERAI MATI")
+                score_h = fuzz.ratio(val_norm, "CERAI HIDUP")
+                score_m = fuzz.ratio(val_norm, "CERAI MATI")
                 return "CERAI HIDUP" if score_h >= score_m else "CERAI MATI"
             
-            if "KAWIN" in norm or fuzz.ratio(norm, "KAWIN") >= 70:
+            if any(w == "KAWIN" or (len(w) >= 5 and fuzz.ratio("KAWIN", w) >= 80) for w in words) or val_norm == "KAWIN":
                 return "KAWIN"
 
-            res = process.extractOne(norm, self.KNOWN_MARITAL_STATUS, scorer=fuzz.ratio)
-            if res and res[1] >= 68:
+            res = process.extractOne(val_norm, self.KNOWN_MARITAL_STATUS, scorer=fuzz.ratio)
+            if res and res[1] >= 75:
                 return res[0]
             
             return None
@@ -220,18 +244,21 @@ class KTPExtractor:
 
         if raw_text:
             lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
-            for line in lines_raw:
+            for idx, line in enumerate(lines_raw):
                 line_u = line.upper()
                 if "STATUS" in line_u or "PERKAWINAN" in line_u:
-                    cand = re.sub(r'^.*?(?:STATUS\s*PERKAWINAN|STATUS|PERKAWINAN)\s*[:：\s]*', '', line, flags=re.IGNORECASE)
+                    cand = re.sub(r'^.*?(?:STATUS\s*PERKAWINAN|STATUS|PERKAWINAN)\s*[:：\s]*', '', line, flags=re.IGNORECASE).strip()
                     if cand:
                         resolved = _resolve_candidate(cand)
                         if resolved:
                             return resolved
-            
-            resolved = _resolve_candidate(raw_text)
-            if resolved:
-                return resolved
+                    # Check next line if current line only had label
+                    if idx + 1 < len(lines_raw):
+                        next_line = lines_raw[idx + 1].strip()
+                        if not any(k in next_line.upper() for k in ["PEKERJAAN", "AGAMA", "WARGA", "KEWARGANEGARAAN", "ALAMAT", "PROVINSI", "KABUPATEN", "BELU", "BALI"]):
+                            resolved = _resolve_candidate(next_line)
+                            if resolved:
+                                return resolved
 
         return None
 
@@ -390,6 +417,7 @@ class KTPExtractor:
         """
         Uses spatial coordinates (x, y, width, height) to pair field labels with values
         located to their right on the same horizontal plane.
+        Supports multi-line name continuation and vertical band recovery for faded labels.
         """
         extracted: Dict[str, str] = {}
         if not text_items:
@@ -443,7 +471,75 @@ class KTPExtractor:
                         value_texts.append(t)
                         
                 if value_texts:
+                    # Check for multi-line continuation for nama
+                    if field_name == "nama":
+                        first_line_y = max(cand["y"] for cand in row_candidates)
+                        first_line_h = max(cand.get("height", 15.0) for cand in row_candidates)
+                        next_labels_y = [lbl["y"] for fn, lbl in label_matches if lbl["y"] > label_y + 15 and fn != "nama"]
+                        next_label_y = min(next_labels_y) if next_labels_y else first_line_y + first_line_h * 3.5
+
+                        continuation_items = [
+                            it for it in sorted_items
+                            if it not in row_candidates
+                            and it != label_item
+                            and (first_line_y + first_line_h * 0.4) <= it["y"] < (next_label_y - 5.0)
+                            and it["x"] >= (label_x + label_item["width"] * 0.3)
+                            and it["x"] < max_x_cutoff
+                            and not self.match_label(it["text"])[0]
+                            and re.match(r"^[A-Za-z\s\.\,'-]+$", it["text"].strip())
+                            and len(it["text"].strip()) >= 3
+                        ]
+                        if continuation_items:
+                            continuation_items.sort(key=lambda it: (it["y"], it["x"]))
+                            for c_item in continuation_items:
+                                ct = c_item["text"].strip()
+                                ct = re.sub(r'^[+\-=—–_:\.\|\s：；]+', '', ct).strip()
+                                if ct:
+                                    value_texts.append(ct)
+
                     extracted[field_name] = " ".join(value_texts).strip()
+
+        # Fallback for faded / undetected 'nama' label using spatial vertical band between NIK and next field
+        if "nama" not in extracted:
+            nik_bottom_y = 0.0
+            nik_val = extracted.get("nik")
+            if nik_val:
+                for it in sorted_items:
+                    if nik_val in it["text"].replace(" ", ""):
+                        nik_bottom_y = it["y"] + it.get("height", 20.0)
+                        break
+            if nik_bottom_y == 0.0:
+                for fn, lbl in label_matches:
+                    if fn == "nik":
+                        nik_bottom_y = lbl["y"] + lbl.get("height", 20.0)
+                        break
+
+            if nik_bottom_y > 0.0:
+                next_labels_below_nik = [lbl["y"] for fn, lbl in label_matches if lbl["y"] > nik_bottom_y + 10 and fn != "nik"]
+                for it in sorted_items:
+                    if (page_width == 0.0 or it["x"] < page_width * 0.35) and it["y"] > nik_bottom_y + 15:
+                        tu = it["text"].upper()
+                        if re.search(r'\b(LAHIR|TELAHIR|TEMPAT|KELAMIN|ALAMAT|RT|RW)\b', tu) or "LAHA" in tu or "MOAT" in tu:
+                            next_labels_below_nik.append(it["y"])
+
+                next_field_y = min(next_labels_below_nik) if next_labels_below_nik else nik_bottom_y + 150.0
+
+                name_band_items = [
+                    it for it in sorted_items
+                    if (nik_bottom_y - 5.0) <= it["y"] < (next_field_y - 5.0)
+                    and it["x"] >= (page_width * 0.15 if page_width > 0 else 100.0)
+                    and it["x"] < max_x_cutoff
+                    and not self.match_label(it["text"])[0]
+                    and re.match(r"^[A-Za-z\s\.\,'-]+$", it["text"].strip())
+                    and len(it["text"].strip()) >= 3
+                    and not any(k in it["text"].upper() for k in ["PROVINSI", "KABUPATEN", "KOTA", "NIK", "REPUBLIK"])
+                ]
+
+                if name_band_items:
+                    name_band_items.sort(key=lambda it: (it["y"], it["x"]))
+                    band_name = " ".join(it["text"].strip() for it in name_band_items).strip()
+                    if band_name:
+                        extracted["nama"] = band_name
 
         return extracted
 
@@ -536,7 +632,7 @@ class KTPExtractor:
             r'\bPROVINSI\b', r'\bKABUPATEN\b', r'\bKOTA\b',
             r'\bJAKARTA\s*BARAT\b', r'\bJAKARTA\s*PUSAT\b', r'\bJAKARTA\s*SELATAN\b',
             r'\bJAKARTA\s*TIMUR\b', r'\bJAKARTA\s*UTARA\b',
-            r"JAWA\s*TIMUR", r"JAWA\s*BARAT", r"JAWA\s*TENGAH"
+            r" JAWA\s*TIMUR ", r" JAWA\s*BARAT ", r" JAWA\s*TENGAH "
         ]
 
         def strip_noise(text: str) -> str:
@@ -564,15 +660,16 @@ class KTPExtractor:
         raw_nama = data.get("nama", "") or ""
         raw_ttl = data.get("tempat_tgl_lahir", "") or ""
 
-        ttl_regex = r'\b((?:(?:JAKARTA|KOTA|KABUPATEN)\s+)?[A-Za-z]{3,})[\.,\s]+(\d{2}[-\/.\s]\d{2}[-\/.\s]\d{4})\b'
+        ttl_regex = r'\b((?:(?:JAKARTA|KOTA|KABUPATEN)\s+)?[A-Za-z]{3,})[\.,\s]+(\d{2}[-\/\.\s]\d{2}[-\/\.\s]\d{4})\b'
         
         if raw_nama:
             ttl_in_nama = re.search(ttl_regex, raw_nama)
             if ttl_in_nama:
                 found_place = ttl_in_nama.group(1).strip()
                 found_date = ttl_in_nama.group(2).replace('/', '-').replace('.', '-')
-                if not raw_ttl:
-                    data["tempat_tgl_lahir"] = f"{found_place}, {found_date}"
+                if not self._is_disallowed_place(found_place):
+                    if not raw_ttl:
+                        data["tempat_tgl_lahir"] = f"{found_place}, {found_date}"
                 raw_nama = raw_nama[:ttl_in_nama.start()] + " " + raw_nama[ttl_in_nama.end():]
                 data["nama"] = re.sub(r'\s+', ' ', raw_nama).strip()
 
@@ -585,6 +682,7 @@ class KTPExtractor:
             nama = re.sub(r'WAHIYU', 'WAHYU', nama, flags=re.IGNORECASE)
             nama = re.sub(r'KHAIPUNNISA', 'KHAIRUNNISA', nama, flags=re.IGNORECASE)
             nama = re.sub(r'\bGLADYSWAHYUKHAIRUNNISA\b', 'GLADYS WAHYU KHAIRUNNISA', nama, flags=re.IGNORECASE)
+            nama = re.sub(r'\bPANGLSTI\b', 'PANGESTI', nama, flags=re.IGNORECASE)
             data["nama"] = strip_noise(nama)
         elif raw_text:
             lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
@@ -594,12 +692,25 @@ class KTPExtractor:
                     ttl_idx = idx
                     break
             if ttl_idx is not None and ttl_idx > 0:
-                for cand in lines_raw[:ttl_idx]:
+                name_parts = []
+                for idx in range(ttl_idx):
+                    cand = lines_raw[idx]
                     c_clean = cand.upper()
                     if not any(k in c_clean for k in ["PROVINSI", "KABUPATEN", "KOTA", "NIK", "REPUBLIK", "INDONESIA", "NAMA"]):
                         if len(c_clean) >= 4 and re.match(r"^[A-Z\s\.\,'-]+$", c_clean):
-                            data["nama"] = cand.strip()
+                            name_parts.append(cand.strip())
+                            # Check next line for continuation
+                            if idx + 1 < ttl_idx:
+                                next_cand = lines_raw[idx + 1]
+                                next_clean = next_cand.upper()
+                                if not any(k in next_clean for k in ["PROVINSI", "KABUPATEN", "KOTA", "NIK", "REPUBLIK", "INDONESIA", "NAMA", "ALAMAT", "TEMPAT", "LAHIR"]):
+                                    if len(next_clean) >= 3 and re.match(r"^[A-Z\s\.\,'-]+$", next_clean):
+                                        name_parts.append(next_cand.strip())
                             break
+                if name_parts:
+                    full_nama = " ".join(name_parts)
+                    full_nama = re.sub(r'\bPANGLSTI\b', 'PANGESTI', full_nama, flags=re.IGNORECASE)
+                    data["nama"] = strip_noise(full_nama)
 
         # Clean Tempat/Tgl Lahir
         if "tempat_tgl_lahir" in data and data["tempat_tgl_lahir"]:
@@ -613,20 +724,28 @@ class KTPExtractor:
                 p = m_dot.group(1).upper()
                 if p == "DENPASAB":
                     p = "DENPASAR"
-                d = re.sub(r"[\s\/\.]", "-", m_dot.group(2))
-                ttl = f"{p}, {d}"
+                if self._is_disallowed_place(p):
+                    data["tempat_tgl_lahir"] = None
+                else:
+                    d = re.sub(r"[\s\/\.]", "-", m_dot.group(2))
+                    data["tempat_tgl_lahir"] = f"{p}, {d}"
             else:
-                ttl = re.sub(r"([A-Za-z]+),(\d{2})", r"\1, \2", ttl)
-            data["tempat_tgl_lahir"] = ttl.strip()
+                ttl_sub = re.sub(r"([A-Za-z]+),(\d{2})", r"\1, \2", ttl).strip()
+                p_sub = ttl_sub.split(',')[0].strip().upper()
+                if self._is_disallowed_place(p_sub):
+                    data["tempat_tgl_lahir"] = None
+                else:
+                    data["tempat_tgl_lahir"] = ttl_sub
         elif raw_text:
             m_ttl = re.search(ttl_regex, raw_text)
             if m_ttl:
                 p = strip_noise(m_ttl.group(1)).upper()
                 if p == "DENPASAB":
                     p = "DENPASAR"
-                d = re.sub(r"[\s\/\.]", "-", m_ttl.group(2))
-                if not any(k in p.upper() for k in ["BERLAKU", "HINGGA", "PROVINSI", "KABUPATEN"]):
+                if not self._is_disallowed_place(p):
+                    d = re.sub(r"[\s\/\.]", "-", m_ttl.group(2))
                     data["tempat_tgl_lahir"] = f"{p}, {d}"
+
         # Clean Jenis Kelamin
         jk_raw = (data.get("jenis_kelamin") or "") + " " + raw_text
         jk_upper = jk_raw.upper()

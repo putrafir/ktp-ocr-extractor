@@ -331,5 +331,63 @@ Berlaku Hingga :
         self.assertEqual(ktp_data.status_perkawinan, "KAWIN")
         self.assertEqual(ktp_data.kewarganegaraan, "WNI")
 
+    def test_multiline_nama_spatial_faded_label(self):
+        # KTP Belu: long name wraps to 2 lines, 'Nama' label not detected by OCR
+        items = [
+            {"text": "PROVINSINUSA TENGGARA TIMUR", "x": 354.0, "y": 11.0, "width": 787.0, "height": 60.0},
+            {"text": "KABUPATENBELU", "x": 543.0, "y": 62.0, "width": 416.0, "height": 54.0},
+            {"text": "NIK", "x": 43.0, "y": 119.0, "width": 136.0, "height": 70.0},
+            {"text": "5304046805980001", "x": 370.0, "y": 129.0, "width": 615.0, "height": 62.0},
+            {"text": "MARIA ALBERTINE F INTAN", "x": 396.0, "y": 214.0, "width": 461.0, "height": 43.0},
+            {"text": "PANGLSTI", "x": 402.0, "y": 256.0, "width": 178.0, "height": 38.0},
+            {"text": "moat/lolLaha", "x": 99.0, "y": 303.0, "width": 207.0, "height": 27.0},
+            {"text": "Kecamatan", "x": 126.0, "y": 505.0, "width": 187.0, "height": 42.0},
+            {"text": "Slalus Perkawinan", "x": 35.0, "y": 588.0, "width": 303.0, "height": 43.0},
+            {"text": "BELU", "x": 1170.0, "y": 606.0, "width": 102.0, "height": 47.0},
+            {"text": "Pekerjaan", "x": 32.0, "y": 628.0, "width": 172.0, "height": 50.0},
+            {"text": "22-00-2018", "x": 1129.0, "y": 653.0, "width": 184.0, "height": 45.0},
+        ]
+        parse_result = {
+            "raw_text": "\n".join(it["text"] for it in items),
+            "text_items": items,
+            "page_width": 1433.0,
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.nik, "5304046805980001")
+        self.assertEqual(ktp_data.nama, "MARIA ALBERTINE F INTAN PANGESTI")
+        # Issue date next to 'Pekerjaan' must not become birth place/date
+        self.assertIsNone(ktp_data.tempat_tgl_lahir)
+        # 'BELU' (regency) must not be read as 'BELUM KAWIN'
+        self.assertIsNone(ktp_data.status_perkawinan)
+
+    def test_multiline_nama_spatial_with_label(self):
+        items = [
+            {"text": "NIK", "x": 40.0, "y": 120.0, "width": 130.0, "height": 40.0},
+            {"text": "5304046805980001", "x": 370.0, "y": 120.0, "width": 600.0, "height": 40.0},
+            {"text": "Nama", "x": 40.0, "y": 214.0, "width": 90.0, "height": 35.0},
+            {"text": "MARIA ALBERTINE F INTAN", "x": 396.0, "y": 214.0, "width": 461.0, "height": 40.0},
+            {"text": "PANGESTI", "x": 402.0, "y": 256.0, "width": 178.0, "height": 38.0},
+            {"text": "Tempat/Tgl Lahir", "x": 40.0, "y": 303.0, "width": 250.0, "height": 35.0},
+            {"text": "ATAMBUA, 28-05-1998", "x": 396.0, "y": 303.0, "width": 300.0, "height": 35.0},
+        ]
+        parse_result = {
+            "raw_text": "\n".join(it["text"] for it in items),
+            "text_items": items,
+            "page_width": 1433.0,
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.nama, "MARIA ALBERTINE F INTAN PANGESTI")
+        self.assertEqual(ktp_data.tempat_tgl_lahir, "ATAMBUA, 28-05-1998")
+
+    def test_status_perkawinan_rejects_regional_false_positive(self):
+        self.assertIsNone(self.extractor.clean_status_perkawinan("BELU"))
+        self.assertIsNone(self.extractor.clean_status_perkawinan("Slatus Perkawinan"))
+        self.assertEqual(self.extractor.clean_status_perkawinan("BELUM KAWIN"), "BELUM KAWIN")
+
+    def test_disallowed_birth_place_whole_word(self):
+        self.assertTrue(self.extractor._is_disallowed_place("PEKERJAAN"))
+        self.assertFalse(self.extractor._is_disallowed_place("JAKARTA"))  # contains 'RT' substring
+        self.assertFalse(self.extractor._is_disallowed_place("KOTA BIMA"))
+
 if __name__ == "__main__":
     unittest.main()
