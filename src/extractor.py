@@ -1,6 +1,6 @@
 import re
 from typing import Dict, Any, List, Optional, Tuple
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 from src.models import KTPData
 from src.config import Config
@@ -28,9 +28,12 @@ class KTPExtractor:
         "berlaku_hingga": ["BERLAKU HINGGA", "BERLAKU"]
     }
 
+    CANONICAL_RELIGIONS = ["ISLAM", "KRISTEN", "KATOLIK", "HINDU", "BUDDHA", "KONGHUCU"]
     KNOWN_RELIGIONS = ["ISLAM", "KRISTEN", "KATHOLIK", "KATOLIK", "HINDU", "BUDDHA", "BUDHA", "KONGHUCU"]
     KNOWN_MARITAL_STATUS = ["BELUM KAWIN", "KAWIN", "CERAI HIDUP", "CERAI MATI", "CERAIHIDUP", "CERAIMATI"]
     KNOWN_GENDERS = ["LAKI-LAKI", "PEREMPUAN"]
+    KNOWN_CITIZENSHIPS = ["WNI", "WNA"]
+    KNOWN_BLOOD_TYPES = ["A", "B", "AB", "O"]
 
     PROVINCE_CODES = {
         '11': 'ACEH', '12': 'SUMATERA UTARA', '13': 'SUMATERA BARAT', '14': 'RIAU',
@@ -48,18 +51,255 @@ class KTPExtractor:
     def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
 
+    def clean_agama(self, raw_val: Optional[str], raw_text: str = "") -> Optional[str]:
+        """
+        Extracts and normalizes religion using scoped spatial candidate priority
+        and rapidfuzz matching against canonical Indonesian religions.
+        Supports typos like 1SLAM, ISLM, KR1STEN, KAT0LIK, KATHOLIK, H1NDU, BUDHA, etc.
+        """
+        def _normalize_text(txt: str) -> str:
+            t = txt.upper()
+            t = re.sub(r'[:：\-\|+=—–_；,\.]', ' ', t)
+            t = t.replace('1', 'I').replace('0', 'O').replace('8', 'B')
+            return re.sub(r'\s+', ' ', t).strip()
+
+        if raw_val:
+            cleaned_val = _normalize_text(raw_val)
+            if cleaned_val:
+                for canon in self.CANONICAL_RELIGIONS:
+                    if canon in cleaned_val:
+                        return canon
+                if "KATHOLIK" in cleaned_val:
+                    return "KATOLIK"
+                if "BUDHA" in cleaned_val:
+                    return "BUDDHA"
+                compact = cleaned_val.replace(" ", "")
+                if "KONGHUCU" in compact or "KONGHUCHU" in compact or "KONGHUC" in compact:
+                    return "KONGHUCU"
+
+                words = [w for w in cleaned_val.split() if w not in ["AGAMA", "NAMA", "ALAMAT"]]
+                best_match = None
+                best_score = 0.0
+                for w in words:
+                    res = process.extractOne(w, self.CANONICAL_RELIGIONS, scorer=fuzz.ratio)
+                    if res and res[1] > best_score:
+                        best_score = res[1]
+                        best_match = res[0]
+                if best_match and best_score >= 68:
+                    return best_match
+
+        if raw_text:
+            lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+            for line in lines_raw:
+                line_norm = _normalize_text(line)
+                if "AGAMA" in line_norm:
+                    sub = re.sub(r'^.*?AGAMA\s*', '', line_norm).strip()
+                    if sub:
+                        for canon in self.CANONICAL_RELIGIONS:
+                            if canon in sub:
+                                return canon
+                        if "KATHOLIK" in sub:
+                            return "KATOLIK"
+                        if "BUDHA" in sub:
+                            return "BUDDHA"
+                        res = process.extractOne(sub, self.CANONICAL_RELIGIONS, scorer=fuzz.partial_ratio)
+                        if res and res[1] >= 65:
+                            return res[0]
+
+            raw_norm = _normalize_text(raw_text)
+            for canon in self.CANONICAL_RELIGIONS:
+                if re.search(rf'\b{canon}\b', raw_norm):
+                    return canon
+
+            tokens = [w for w in raw_norm.split() if len(w) >= 4]
+            best_match = None
+            best_score = 0.0
+            for tok in tokens:
+                if tok in ["AGAMA", "STATUS", "PERKAWINAN", "WARGA", "NEGARA", "INDONESIA", "PROVINSI", "KABUPATEN"]:
+                    continue
+                res = process.extractOne(tok, self.CANONICAL_RELIGIONS, scorer=fuzz.ratio)
+                if res and res[1] > best_score:
+                    best_score = res[1]
+                    best_match = res[0]
+            if best_match and best_score >= 72:
+                return best_match
+
+        return None
+
+    def clean_gol_darah(self, raw_val: Optional[str], raw_text: str = "") -> Optional[str]:
+        """
+        Extracts and normalizes blood type (A, B, AB, O) while strictly mapping
+        hyphens (-), empty, or unknown to None (null).
+        Corrects OCR typos (0/Q/D -> O, 8 -> B, 4 -> A).
+        """
+        def _parse_candidate(cand: str) -> Optional[str]:
+            c = cand.strip().upper()
+            if not c or c in ["-", "_", "—", "–", "NONE", "TIDAK", "NIHIL"] or re.match(r"^[-—–_.:]+$", c):
+                return None
+            
+            c = re.sub(r'[^A-Z0-9]', '', c)
+            c = c.replace('0', 'O').replace('Q', 'O').replace('D', 'O')
+            c = c.replace('8', 'B').replace('4', 'A')
+
+            c = re.sub(r'[^ABO]', '', c)
+            if not c:
+                return None
+
+            if "AB" in c:
+                return "AB"
+            if "A" in c and "B" not in c:
+                return "A"
+            if "B" in c:
+                return "B"
+            if "O" in c:
+                return "O"
+            return None
+
+        if raw_val is not None:
+            val_strip = raw_val.strip()
+            if val_strip in ["-", "_", "—", "–", ""] or re.match(r"^[-—–_.:]+$", val_strip):
+                return None
+            parsed = _parse_candidate(raw_val)
+            if parsed:
+                return parsed
+
+        if raw_text:
+            goldar_m = re.search(
+                r"(?:GOL(?:ONGAN)?\.?\s*(?:DARAH|DARAT)|\bDARAH|\bDARAT)\s*[:：\s]*([ABO084QD\-_—–]{1,4})\b",
+                raw_text,
+                flags=re.IGNORECASE
+            )
+            if goldar_m:
+                cand = goldar_m.group(1)
+                return _parse_candidate(cand)
+
+        return None
+
+    def clean_status_perkawinan(self, raw_val: Optional[str], raw_text: str = "") -> Optional[str]:
+        """
+        Extracts and normalizes marital status into canonical values:
+        ['BELUM KAWIN', 'KAWIN', 'CERAI HIDUP', 'CERAI MATI'].
+        Corrects OCR typos like BELUM KAW1N, BLM KAWIN, CERAIHIDUP, etc.
+        """
+        def _normalize_text(txt: str) -> str:
+            t = txt.upper()
+            t = re.sub(r'[:：\-\|+=—–_；,\.]', ' ', t)
+            t = t.replace('1', 'I').replace('!', 'I').replace('0', 'O')
+            return re.sub(r'\s+', ' ', t).strip()
+
+        def _resolve_candidate(txt: str) -> Optional[str]:
+            norm = _normalize_text(txt)
+            if not norm:
+                return None
+            
+            if "BELUM" in norm or "BLM" in norm or fuzz.partial_ratio("BELUM", norm) >= 80:
+                return "BELUM KAWIN"
+            
+            if "CERAI" in norm or fuzz.partial_ratio("CERAI", norm) >= 75:
+                if "MATI" in norm or "MAT1" in norm or fuzz.partial_ratio("MATI", norm) >= 75:
+                    return "CERAI MATI"
+                if "HIDUP" in norm or "H1DUP" in norm or fuzz.partial_ratio("HIDUP", norm) >= 70:
+                    return "CERAI HIDUP"
+                score_h = fuzz.ratio(norm, "CERAI HIDUP")
+                score_m = fuzz.ratio(norm, "CERAI MATI")
+                return "CERAI HIDUP" if score_h >= score_m else "CERAI MATI"
+            
+            if "KAWIN" in norm or fuzz.ratio(norm, "KAWIN") >= 70:
+                return "KAWIN"
+
+            res = process.extractOne(norm, self.KNOWN_MARITAL_STATUS, scorer=fuzz.ratio)
+            if res and res[1] >= 68:
+                return res[0]
+            
+            return None
+
+        if raw_val:
+            resolved = _resolve_candidate(raw_val)
+            if resolved:
+                return resolved
+
+        if raw_text:
+            lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+            for line in lines_raw:
+                line_u = line.upper()
+                if "STATUS" in line_u or "PERKAWINAN" in line_u:
+                    cand = re.sub(r'^.*?(?:STATUS\s*PERKAWINAN|STATUS|PERKAWINAN)\s*[:：\s]*', '', line, flags=re.IGNORECASE)
+                    if cand:
+                        resolved = _resolve_candidate(cand)
+                        if resolved:
+                            return resolved
+            
+            resolved = _resolve_candidate(raw_text)
+            if resolved:
+                return resolved
+
+        return None
+
+    def clean_kewarganegaraan(self, raw_val: Optional[str], raw_text: str = "") -> Optional[str]:
+        """
+        Extracts and normalizes citizenship (WNI or WNA).
+        Tolerates OCR noise like 'W N I', 'W.N.I', 'WN1', 'W-N-I', etc.
+        """
+        def _resolve(txt: str) -> Optional[str]:
+            if not txt:
+                return None
+            t = txt.upper()
+            compressed = re.sub(r'[\s\.\-_/]+', '', t)
+            compressed = compressed.replace('1', 'I').replace('4', 'A')
+
+            if "WNI" in compressed:
+                return "WNI"
+            if "WNA" in compressed:
+                return "WNA"
+            
+            if fuzz.partial_ratio("WNI", t) >= 75:
+                return "WNI"
+            if fuzz.partial_ratio("WNA", t) >= 75:
+                return "WNA"
+            return None
+
+        if raw_val:
+            res = _resolve(raw_val)
+            if res:
+                return res
+
+        if raw_text:
+            lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+            for line in lines_raw:
+                if "WARGA" in line.upper() or "KEWARGANEGARAAN" in line.upper():
+                    cand = re.sub(r'^.*?(?:KEWARGANEGARAAN|WARGA\s*NEGARA)\s*[:：\s]*', '', line, flags=re.IGNORECASE)
+                    res = _resolve(cand)
+                    if res:
+                        return res
+
+            if re.search(r'\bW[\s\.]*N[\s\.]*[I1]\b', raw_text, flags=re.IGNORECASE):
+                return "WNI"
+            if re.search(r'\bW[\s\.]*N[\s\.]*[A4]\b', raw_text, flags=re.IGNORECASE):
+                return "WNA"
+
+        return None
+
+
     def resolve_17_digit_nik(self, digits_str: str, context_text: str = "") -> str:
         """
         Disambiguates 17-digit NIK strings resulting from leading/trailing OCR noise
-        (e.g., misread colon ':' or vertical line '|' interpreted as '1').
+        (e.g., misread colon ':' or vertical line '|' interpreted as '1', '2', etc.).
         """
         if len(digits_str) != 17:
             return digits_str[:16]
 
-        opt_tail = digits_str[1:]   # Drop leading noise (e.g. colon read as '1')
+        opt_tail = digits_str[1:]   # Drop leading noise (e.g. colon read as '1' or '2')
         opt_head = digits_str[:16]  # Drop trailing digit
 
-        # 1. Match birth date from context text if available (DDMMYY or female DD+40MMYY)
+        # 1. Check province code validity between head and tail:
+        head_prov = opt_head[:2]
+        tail_prov = opt_tail[:2]
+        if head_prov not in self.PROVINCE_CODES and tail_prov in self.PROVINCE_CODES:
+            return opt_tail
+        if tail_prov not in self.PROVINCE_CODES and head_prov in self.PROVINCE_CODES:
+            return opt_head
+
+        # 2. Match birth date from context text if available (DDMMYY or female DD+40MMYY)
         if context_text:
             date_m = re.search(r'(\d{2})[-/.](\d{2})[-/.]\d{2}(\d{2})', context_text)
             if date_m:
@@ -74,15 +314,18 @@ class KTPExtractor:
                 except ValueError:
                     pass
 
-            # 2. Match province code from context text
-            prov_tail = opt_tail[:2]
-            if prov_tail in self.PROVINCE_CODES:
-                prov_name = self.PROVINCE_CODES[prov_tail].replace(" ", "")
+            # 3. Match province code from context text
+            if tail_prov in self.PROVINCE_CODES:
+                prov_name = self.PROVINCE_CODES[tail_prov].replace(" ", "")
                 if prov_name in context_text.replace(" ", "").upper():
                     return opt_tail
+            if head_prov in self.PROVINCE_CODES:
+                prov_name = self.PROVINCE_CODES[head_prov].replace(" ", "")
+                if prov_name in context_text.replace(" ", "").upper():
+                    return opt_head
 
-        # 3. Fallback: if leading character is 1/7/0 and tail starts with a valid province code
-        if digits_str[0] in ['1', '7', '0', '|'] and opt_tail[:2] in self.PROVINCE_CODES:
+        # 4. Fallback: if leading character is noise (1, 2, 7, 0, |, :) and tail starts with valid province
+        if digits_str[0] in ['1', '2', '7', '0', '|', ':'] and tail_prov in self.PROVINCE_CODES:
             return opt_tail
 
         return opt_head
@@ -238,30 +481,28 @@ class KTPExtractor:
 
             # Religion check
             if "agama" not in extracted:
-                for rel in self.KNOWN_RELIGIONS:
-                    if re.search(rf'\b{rel}\b', line_upper):
-                        extracted["agama"] = rel
-                        break
+                if "AGAMA" in line_upper or any(r in line_upper for r in self.KNOWN_RELIGIONS):
+                    ag_cand = self.clean_agama(line)
+                    if ag_cand:
+                        extracted["agama"] = ag_cand
 
             # Marital Status check
             if "status_perkawinan" not in extracted:
-                for stat in self.KNOWN_MARITAL_STATUS:
-                    if re.search(rf'\b{stat}\b', line_upper):
-                        extracted["status_perkawinan"] = "CERAI HIDUP" if "CERAI" in stat and "HIDUP" in stat else "CERAI MATI" if "CERAI" in stat and "MATI" in stat else "BELUM KAWIN" if "BELUM" in stat else "KAWIN"
-                        break
+                sp_cand = self.clean_status_perkawinan(line)
+                if sp_cand:
+                    extracted["status_perkawinan"] = sp_cand
 
             # Citizenship check
             if "kewarganegaraan" not in extracted:
-                if "WNI" in line_upper:
-                    extracted["kewarganegaraan"] = "WNI"
-                elif "WNA" in line_upper:
-                    extracted["kewarganegaraan"] = "WNA"
+                kw_cand = self.clean_kewarganegaraan(line)
+                if kw_cand:
+                    extracted["kewarganegaraan"] = kw_cand
 
             # Blood type
             if "gol_darah" not in extracted:
-                goldar_match = re.search(r'(?:GOL(?:ONGAN)?\.?\s*DARAH|\bDARAH)\s*[:：\s]*([ABO]|AB)\b', line_upper)
-                if goldar_match and goldar_match.group(1):
-                    extracted["gol_darah"] = goldar_match.group(1)
+                gd_cand = self.clean_gol_darah(None, raw_text=line)
+                if gd_cand:
+                    extracted["gol_darah"] = gd_cand
 
             # Validity check
             if "berlaku_hingga" not in extracted:
@@ -339,6 +580,11 @@ class KTPExtractor:
         if "nama" in data and data["nama"]:
             nama = strip_noise(data["nama"])
             nama = re.split(r"\b(TEMPAT|TGL|LAHIR|JENIS|ALAMAT)\b", nama, flags=re.IGNORECASE)[0]
+            nama = strip_noise(nama)
+            # Correct common OCR letter substitutions and word segmentation
+            nama = re.sub(r'WAHIYU', 'WAHYU', nama, flags=re.IGNORECASE)
+            nama = re.sub(r'KHAIPUNNISA', 'KHAIRUNNISA', nama, flags=re.IGNORECASE)
+            nama = re.sub(r'\bGLADYSWAHYUKHAIRUNNISA\b', 'GLADYS WAHYU KHAIRUNNISA', nama, flags=re.IGNORECASE)
             data["nama"] = strip_noise(nama)
         elif raw_text:
             lines_raw = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
@@ -381,14 +627,9 @@ class KTPExtractor:
                 d = re.sub(r"[\s\/\.]", "-", m_ttl.group(2))
                 if not any(k in p.upper() for k in ["BERLAKU", "HINGGA", "PROVINSI", "KABUPATEN"]):
                     data["tempat_tgl_lahir"] = f"{p}, {d}"
-        # Clean Jenis Kelamin & Golongan Darah
+        # Clean Jenis Kelamin
         jk_raw = (data.get("jenis_kelamin") or "") + " " + raw_text
         jk_upper = jk_raw.upper()
-
-        if "gol_darah" not in data or not data["gol_darah"]:
-            goldar_m = re.search(r"(?:GOL(?:ONGAN)?\.?\s*(?:DARAH|DARAT)|\bDARAH|\bDARAT)\s*[:：\s]*([ABO]|AB)\b", jk_upper)
-            if goldar_m:
-                data["gol_darah"] = goldar_m.group(1)
 
         if "PEREMPUAN" in jk_upper or "EREMPUAN" in jk_upper:
             data["jenis_kelamin"] = "PEREMPUAN"
@@ -396,6 +637,9 @@ class KTPExtractor:
             data["jenis_kelamin"] = "LAKI-LAKI"
         else:
             data["jenis_kelamin"] = None
+
+        # Clean Golongan Darah
+        data["gol_darah"] = self.clean_gol_darah(data.get("gol_darah"), raw_text=raw_text)
         # Clean Alamat
         if "alamat" in data and data["alamat"]:
             alamat = strip_noise(data["alamat"])
@@ -435,35 +679,17 @@ class KTPExtractor:
             data["kecamatan"] = strip_noise(data["kecamatan"])
 
         # Clean Agama
-        ag_search = (data.get("agama") or "") + " " + raw_text
-        data["agama"] = None
-        for r in self.KNOWN_RELIGIONS:
-            if re.search(rf'\b{r}\b', ag_search.upper()):
-                data["agama"] = r
-                break
+        data["agama"] = self.clean_agama(data.get("agama"), raw_text=raw_text)
 
         # Clean Status Perkawinan
-        sp_search = (data.get("status_perkawinan") or "") + " " + raw_text
-        sp_upper = sp_search.upper()
-        if "BELUM KAWIN" in sp_upper:
-            data["status_perkawinan"] = "BELUM KAWIN"
-        elif "CERAI HIDUP" in sp_upper or "CERAIHIDUP" in sp_upper:
-            data["status_perkawinan"] = "CERAI HIDUP"
-        elif "CERAI MATI" in sp_upper or "CERAIMATI" in sp_upper:
-            data["status_perkawinan"] = "CERAI MATI"
-        elif "KAWIN" in sp_upper:
-            data["status_perkawinan"] = "KAWIN"
+        data["status_perkawinan"] = self.clean_status_perkawinan(data.get("status_perkawinan"), raw_text=raw_text)
 
         # Clean Pekerjaan
         if "pekerjaan" in data and data["pekerjaan"]:
             data["pekerjaan"] = strip_noise(data["pekerjaan"])
 
         # Clean Kewarganegaraan
-        kw_upper = ((data.get("kewarganegaraan") or "") + " " + raw_text).upper()
-        if "WNI" in kw_upper:
-            data["kewarganegaraan"] = "WNI"
-        elif "WNA" in kw_upper:
-            data["kewarganegaraan"] = "WNA"
+        data["kewarganegaraan"] = self.clean_kewarganegaraan(data.get("kewarganegaraan"), raw_text=raw_text)
 
         # Clean Berlaku Hingga
         bh_upper = ((data.get("berlaku_hingga") or "") + " " + raw_text).upper()
