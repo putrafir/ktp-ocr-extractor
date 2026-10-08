@@ -413,7 +413,7 @@ class KTPExtractor:
             return best_field, best_score
         return None, best_score
 
-    def extract_from_spatial_items(self, text_items: List[Dict[str, Any]], page_width: float = 0.0) -> Dict[str, str]:
+    def extract_from_spatial_items(self, text_items: List[Dict[str, Any]], page_width: float = 0.0, page_height: float = 0.0) -> Dict[str, str]:
         """
         Uses spatial coordinates (x, y, width, height) to pair field labels with values
         located to their right on the same horizontal plane.
@@ -425,6 +425,8 @@ class KTPExtractor:
 
         # Cutoff to ignore photo and signature section on the right
         max_x_cutoff = page_width * 0.67 if page_width > 0 else 99999.0
+        if page_height <= 0.0 and text_items:
+            page_height = max([it["y"] + it.get("height", 10.0) for it in text_items], default=900.0)
 
         # Sort items primarily by Y, then X
         sorted_items = sorted(text_items, key=lambda it: (it["y"], it["x"]))
@@ -498,6 +500,16 @@ class KTPExtractor:
                                     value_texts.append(ct)
 
                     extracted[field_name] = " ".join(value_texts).strip()
+
+        # Geometric Anchor Fallback for NIK if not found by label pairing
+        if "nik" not in extracted and page_width > 0:
+            for it in sorted_items:
+                in_nik_zone = (0.15 * page_width <= it["x"] <= 0.85 * page_width) and (0.07 * page_height <= it["y"] <= 0.28 * page_height)
+                if in_nik_zone:
+                    cand_nik = self.clean_nik(it["text"])
+                    if cand_nik and len(cand_nik) == 16:
+                        extracted["nik"] = cand_nik
+                        break
 
         # Fallback for faded / undetected 'nama' label using spatial vertical band between NIK and next field
         if "nama" not in extracted:
@@ -830,7 +842,7 @@ class KTPExtractor:
         page_width = parse_result.get("page_width", 0.0)
         raw_text = parse_result.get("raw_text", "")
 
-        spatial_dict = self.extract_from_spatial_items(parse_result.get("text_items", []), page_width=page_width)
+        spatial_dict = self.extract_from_spatial_items(parse_result.get("text_items", []), page_width=page_width, page_height=parse_result.get("page_height", 0.0))
         raw_text_dict = self.extract_from_raw_text(raw_text)
 
         # Merge results: Spatial takes priority, fallback to raw regex

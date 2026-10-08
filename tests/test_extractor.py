@@ -389,5 +389,43 @@ Berlaku Hingga :
         self.assertFalse(self.extractor._is_disallowed_place("JAKARTA"))  # contains 'RT' substring
         self.assertFalse(self.extractor._is_disallowed_place("KOTA BIMA"))
 
+    def test_ktp_belu_male_nik_and_goldar(self):
+        items = [
+            {"text": "PROVINSI NUSA TENGGARA TIMUR", "x": 354.0, "y": 11.0, "width": 787.0, "height": 60.0},
+            {"text": "KABUPATEN BELU", "x": 543.0, "y": 62.0, "width": 416.0, "height": 54.0},
+            {"text": "NIK", "x": 43.0, "y": 119.0, "width": 136.0, "height": 70.0},
+            {"text": ": 5304040304040005", "x": 370.0, "y": 129.0, "width": 615.0, "height": 62.0},
+            {"text": "Gol. Darah : O", "x": 500.0, "y": 340.0, "width": 200.0, "height": 35.0},
+            {"text": "Kewarganegaraan", "x": 33.0, "y": 672.0, "width": 300.0, "height": 53.0},
+            {"text": "WNI", "x": 370.0, "y": 672.0, "width": 100.0, "height": 53.0},
+        ]
+        parse_result = {
+            "raw_text": "\n".join(it["text"] for it in items),
+            "text_items": items,
+            "page_width": 1433.0,
+            "page_height": 900.0
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.nik, "5304040304040005")
+        self.assertEqual(ktp_data.gol_darah, "O")
+        self.assertEqual(ktp_data.kewarganegaraan, "WNI")
+
+    def test_geometric_zone_nik_recovery_without_label(self):
+        # Case where 'NIK' label is totally missed by OCR, but 16 digits sit in NIK geometric zone
+        items = [
+            {"text": "5304040304040005", "x": 370.0, "y": 130.0, "width": 600.0, "height": 50.0},
+            {"text": "Nama", "x": 40.0, "y": 214.0, "width": 90.0, "height": 35.0},
+            {"text": "BUDI SANTOSO", "x": 370.0, "y": 214.0, "width": 350.0, "height": 35.0},
+        ]
+        parse_result = {
+            "raw_text": "\n".join(it["text"] for it in items),
+            "text_items": items,
+            "page_width": 1400.0,
+            "page_height": 900.0
+        }
+        ktp_data = self.extractor.extract(parse_result)
+        self.assertEqual(ktp_data.nik, "5304040304040005")
+        self.assertEqual(ktp_data.nama, "BUDI SANTOSO")
+
 if __name__ == "__main__":
     unittest.main()
