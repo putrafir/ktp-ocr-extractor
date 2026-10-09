@@ -22,9 +22,8 @@ def main():
     parser.add_argument(
         "--engine", "-e",
         type=str,
-        choices=["paddle", "liteparse"],
         default="paddle",
-        help="OCR Engine: 'paddle' (Recommended, deep learning) or 'liteparse' (experimental)"
+        help="OCR Engine (Default: paddle / RapidOCR ONNX)"
     )
     parser.add_argument(
         "--no-strict",
@@ -51,8 +50,8 @@ def main():
         print(f"Error: File '{image_path}' tidak ditemukan.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[*] Memproses citra: {image_path} [Engine: {args.engine}]...")
-    pipeline = KTPExtractionPipeline(engine=args.engine, strict_validation=not args.no_strict)
+    print(f"[*] Memproses citra: {image_path} [Engine: PaddleOCR]...")
+    pipeline = KTPExtractionPipeline(strict_validation=not args.no_strict)
 
     try:
         result = pipeline.process(image_path)

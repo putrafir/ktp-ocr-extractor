@@ -8,7 +8,7 @@ from src.config import Config
 class KTPExtractor:
     """
     Extracts structured KTP Key-Value pairs using spatial layout items and regex heuristics.
-    Supports both PaddleOCR and LiteParse coordinates and outputs.
+    Supports PaddleOCR bounding box coordinates and spatial layout parsing.
     """
 
     LABEL_PATTERNS = {

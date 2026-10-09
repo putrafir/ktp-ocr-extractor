@@ -5,6 +5,7 @@ import numpy as np
 
 from src.config import Config
 from src.preprocessor import ImagePreprocessor
+from src.paddle_parser import PaddleKTPParser
 from src.extractor import KTPExtractor
 from src.validator import KTPValidator
 from src.models import KTPData, KTPValidationResult
@@ -13,24 +14,17 @@ class KTPExtractionPipeline:
     """
     End-to-end pipeline:
     1. Preprocessing (OpenCV deskew + resolution optimization + HEIC support)
-    2. Document & Layout OCR Parsing (PaddleOCR / LiteParse)
+    2. Deep Learning OCR & Spatial Layout Parsing (PaddleOCR / RapidOCR ONNX)
     3. Document Validation & Classification (Two-Tier Hybrid KTPValidator)
     4. Key-Value Extraction (KTPExtractor with spatial pairing & regex validation)
     """
 
     def __init__(self, config: Config | None = None, engine: str = "paddle", strict_validation: bool = True):
         self.config = config or Config()
-        self.engine_name = engine.lower()
+        self.engine_name = "paddle"
         self.strict_validation = strict_validation
         self.preprocessor = ImagePreprocessor(target_height=900, max_width=self.config.MAX_IMAGE_WIDTH)
-        
-        if self.engine_name == "liteparse":
-            from src.parser import LiteParseKTPParser
-            self.parser = LiteParseKTPParser(config=self.config)
-        else:
-            from src.paddle_parser import PaddleKTPParser
-            self.parser = PaddleKTPParser(config=self.config)
-
+        self.parser = PaddleKTPParser(config=self.config)
         self.extractor = KTPExtractor(config=self.config)
         self.validator = KTPValidator(config=self.config)
 
@@ -54,7 +48,7 @@ class KTPExtractionPipeline:
         preprocessed_img, temp_file_path = self.preprocessor.process(image_input)
 
         try:
-            # Step 2: Parse layout and text with chosen engine
+            # Step 2: Parse layout and text with PaddleOCR engine
             parse_result = self.parser.parse_document(temp_file_path)
 
             # Step 3: Two-Tier Hybrid KTP Validation
