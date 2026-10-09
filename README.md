@@ -18,7 +18,7 @@ Mendukung input foto kamera smartphone dalam berbagai format (**JPG, PNG, WEBP, 
   * **Tier 1 (Visual Quality & Filter)**: Memeriksa tingkat keburaman citra (*Laplacian blur variance*), rasio aspek kartu, dan deteksi warna visual.
   * **Tier 2 (Semantic Layout Scoring)**: Menghitung kepadatan kata kunci resmi Dukcapil dan struktur dokumen untuk memfilter dan menolak otomatis dokumen non-KTP (*receipt*, SIM, dokumen acak) sebelum ekstraksi dilakukan.
 * **Multi-Line Name & Faded Label Extraction**:
-  * Mampu mengekstrak nama warga yang panjang hingga turun ke 2 baris (misal: `MARIA ALBERTINE F INTAN PANGESTI`).
+  * Mampu mengekstrak nama warga yang panjang hingga turun ke 2 baris (misal: `ALEXANDER KUSUMA ATMAJA`).
   * Dilengkapi **Geometric Anchor Fallback**: mengekstrak nama dan NIK berbasis zona koordinat relatif kartu meskipun label teks fisiknya pudar atau aus.
 * **Tuned DBNet & Text Angle Classifier Protection**:
   * Ekspansi bounding box `OCR_DET_UNCLIP_RATIO = 2.2` untuk mencegah terpotongnya huruf kapital atau angka tepi oleh garis batik latar belakang.
@@ -298,20 +298,20 @@ OK
 
 ```json
 {
-  "nik": "5304046805980001",
-  "nama": "MARIA ALBERTINE F INTAN PANGESTI",
-  "tempat_tgl_lahir": "ATAMBUA, 28-05-1998",
+  "nik": "3171234567890123",
+  "nama": "MIRA SETIAWAN",
+  "tempat_tgl_lahir": "JAKARTA, 18-02-1986",
   "jenis_kelamin": "PEREMPUAN",
-  "gol_darah": "O",
-  "alamat": "JL. FLORES INDAH NO 12",
-  "rt_rw": "002/001",
-  "kel_desa": "KOTA UNENG",
-  "kecamatan": "ALOK",
-  "agama": "KATOLIK",
-  "status_perkawinan": "BELUM KAWIN",
-  "pekerjaan": "KARYAWAN SWASTA",
+  "gol_darah": "B",
+  "alamat": "JL. PASTI CEPAT A7/66",
+  "rt_rw": "007/008",
+  "kel_desa": "PEGADUNGAN",
+  "kecamatan": "KALIDERES",
+  "agama": "ISLAM",
+  "status_perkawinan": "KAWIN",
+  "pekerjaan": "PEGAWAI SWASTA",
   "kewarganegaraan": "WNI",
-  "berlaku_hingga": "SEUMUR HIDUP"
+  "berlaku_hingga": "22-02-2017"
 }
 ```
 
