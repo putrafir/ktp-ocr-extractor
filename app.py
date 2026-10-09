@@ -32,13 +32,9 @@ Dilengkapi **Two-Tier Document Validator** untuk memverifikasi apakah berkas yan
 
 # Sidebar settings
 with st.sidebar:
-    st.header("⚙️ Konfigurasi Engine")
-    ocr_engine = st.selectbox(
-        "Pilih OCR Engine:",
-        ["paddle", "liteparse"],
-        format_func=lambda x: "PaddleOCR (Rekomendasi: Akurasi Tinggi)" if x == "paddle" else "LiteParse (Eksperimen Layout)",
-        index=0
-    )
+    st.header("⚙️ Konfigurasi Sistem")
+    st.info("🚀 **OCR Engine:** PaddleOCR (RapidOCR ONNX Runtime)")
+    
     max_dim = st.number_input("Max Dimension (px)", value=1200, step=100)
     strict_validation = st.checkbox(
         "Strict KTP Validation",
@@ -56,20 +52,18 @@ with st.sidebar:
     st.markdown("""
     - **Model Spec:** Local Model (Zero Cloud SaaS)
     - **Validation:** Two-Tier Hybrid (Visual Sanity + Semantic Layout)
-    - **Engines:**
-      - **PaddleOCR:** DBNet + SVTR deep learning (OnnxRuntime)
-      - **LiteParse:** Spatial grid projection (PDFium/Rust)
+    - **OCR Engine:** PaddleOCR (DBNet + SVTR deep learning via ONNX Runtime)
     - **Preprocessing:** Auto-Deskew + HEIC iPhone support
-    - **Latency Focus:** Yes (~500 - 900 ms)
+    - **Latency Focus:** Yes (~500 - 800 ms)
     """)
 
 # Pipeline instance cached with module reload & cache bust
 @st.cache_resource(show_spinner=False)
-def get_pipeline(engine_name: str, max_d: int, strict_mode: bool, _v: int = 4):
+def get_pipeline(max_d: int, strict_mode: bool, _v: int = 5):
     cfg = Config(MAX_IMAGE_WIDTH=max_d, OCR_DET_UNCLIP_RATIO=2.2)
-    return KTPExtractionPipeline(config=cfg, engine=engine_name, strict_validation=strict_mode)
+    return KTPExtractionPipeline(config=cfg, strict_validation=strict_mode)
 
-pipeline = get_pipeline(ocr_engine, max_dim, strict_validation, _v=4)
+pipeline = get_pipeline(max_dim, strict_validation, _v=5)
 
 # Sample file selector
 samples_dir = Path("data/samples")
@@ -119,7 +113,7 @@ if target_image_bytes:
 
     with col_res:
         st.subheader("⚡ Proses Ekstraksi & Validasi")
-        with st.spinner(f"Mengekstrak dan memvalidasi dokumen dengan {ocr_engine.upper()}..."):
+        with st.spinner("Mengekstrak dan memvalidasi dokumen dengan PaddleOCR..."):
             try:
                 try:
                     result = pipeline.process(target_image_bytes, strict_validation=strict_validation)
@@ -139,7 +133,7 @@ if target_image_bytes:
                 with mcol1:
                     st.metric(label="⏱️ Total Latensi", value=f"{latency_ms} ms")
                 with mcol2:
-                    st.metric(label="🚀 Engine", value=result["engine"].upper())
+                    st.metric(label="🚀 Engine", value="PaddleOCR")
                 with mcol3:
                     st.metric(label="🔍 Text Elements", value=f"{items_count} items")
 
@@ -152,7 +146,7 @@ if target_image_bytes:
                             st.markdown(f"- ❌ {r}")
                 else:
                     conf_pct = val.get('confidence_score', 0) * 100
-                    st.success(f"✅ Dokumen KTP Terverifikasi (Keyakinan: {conf_pct:.1f}%) | Engine: {result['engine'].upper()}")
+                    st.success(f"✅ Dokumen KTP Terverifikasi (Keyakinan: {conf_pct:.1f}%) | Engine: PaddleOCR")
 
             except Exception as e:
                 st.error(f"Terjadi kesalahan saat ekstraksi: {e}")
@@ -213,7 +207,7 @@ if target_image_bytes:
                 st.download_button(
                     label="📥 Unduh Hasil JSON",
                     data=json_str,
-                    file_name=f"ktp_{ocr_engine}.json",
+                    file_name="ktp_extracted.json",
                     mime="application/json"
                 )
 

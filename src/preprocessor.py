@@ -120,7 +120,7 @@ class ImagePreprocessor:
     def process(self, image_input: Union[str, Path, bytes, np.ndarray]) -> Tuple[np.ndarray, Path]:
         """
         Runs loading (with HEIC & EXIF rotation), deskewing, resolution optimization,
-        and writes temporary PNG file for LiteParse.
+        and writes temporary PNG file for OCR parsing.
         Returns:
             Tuple of (processed_cv2_image, temp_file_path)
         """

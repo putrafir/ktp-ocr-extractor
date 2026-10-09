@@ -1,14 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from typing import Literal
 
 from src.pipeline import KTPExtractionPipeline
 
 app = FastAPI(
     title="KTP Information Extractor API",
-    description="API for local Indonesian KTP extraction, layout analysis, and document validation.",
-    version="1.1.0"
+    description="API for local Indonesian KTP extraction, layout analysis, and document validation using PaddleOCR ONNX Runtime.",
+    version="1.2.0"
 )
 
 # Enable CORS for frontend integration
@@ -20,26 +19,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cache pipelines
-pipelines = {
-    "paddle": KTPExtractionPipeline(engine="paddle"),
-    "liteparse": KTPExtractionPipeline(engine="liteparse")
-}
+# Pipeline instance
+pipeline = KTPExtractionPipeline()
 
 @app.get("/")
 def root():
     return {
         "status": "online",
         "service": "KTP Information Extractor & Validator",
-        "version": "1.1.0",
-        "engines_available": ["paddle", "liteparse"],
+        "version": "1.2.0",
+        "ocr_engine": "PaddleOCR (rapidocr-onnxruntime)",
         "validation_enabled": True
     }
 
 @app.post("/extract")
 async def extract_ktp(
     file: UploadFile = File(..., description="KTP image file (JPG, PNG, HEIC, WEBP)"),
-    engine: Literal["paddle", "liteparse"] = Query("paddle", description="OCR engine to use"),
     strict: bool = Query(True, description="Strict KTP validation (rejects non-KTP images with 422)")
 ):
     """
@@ -51,7 +46,6 @@ async def extract_ktp(
         if not content:
             raise HTTPException(status_code=400, detail="Empty file uploaded.")
 
-        pipeline = pipelines.get(engine, pipelines["paddle"])
         result = pipeline.process(content, strict_validation=strict)
 
         if result.get("status") == "rejected":
